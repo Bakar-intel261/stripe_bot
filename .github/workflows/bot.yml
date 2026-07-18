@@ -21,17 +21,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          playwright install chromium
-      
-      - name: Install Donut Browser
-        run: |
-          wget -O donut.AppImage https://github.com/DonutBrowser/donut-browser/releases/latest/download/donut-latest.AppImage
-          chmod +x donut.AppImage
-          ./donut.AppImage --appimage-extract
-          nohup ./squashfs-root/AppRun &
-          sleep 10
       
       - name: Run Bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        run: python bot.py
+        run: |
+          echo "🚀 Starting bot..."
+          python bot.py

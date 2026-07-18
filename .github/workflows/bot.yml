@@ -1,59 +1,65 @@
-name: Run Bot
+name: Telegram Donut Bot
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-  schedule:
-    - cron: '0 * * * *'
-
-env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
-  build:
+  run-bot:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfuse2 \
+            xvfb \
+            wget \
+            libx11-xcb1 \
+            libxcb-dri3-0 \
+            libdrm2 \
+            libgbm1 \
+            libasound2
+
+      - name: Download Donut AppImage
+        run: |
+          wget -O /tmp/donut.AppImage \
+            https://github.com/zhom/donutbrowser/releases/download/v0.28.2/Donut_0.28.2_amd64.AppImage
+          chmod +x /tmp/donut.AppImage
+          cd /tmp
+          ./donut.AppImage --appimage-extract
+          mkdir -p ~/.local/bin
+          mv squashfs-root ~/.local/bin/donut
+
+      - name: Start Donut browser
+        run: |
+          xvfb-run -a ~/.local/bin/donut/AppRun &
+          sleep 10
+          for i in {1..30}; do
+            if curl -s http://localhost:10108/v1/status > /dev/null; then
+              echo "✅ Donut API is ready"
+              break
+            fi
+            echo "⏳ Waiting for Donut API... ($i/30)"
+            sleep 2
+          done
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
 
       - name: Install Python dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Cache Playwright browsers
-        id: cache-playwright
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install Playwright browsers
-        if: steps.cache-playwright.outputs.cache-hit != 'true'
-        run: |
-          playwright install --with-deps chromium
-
-      - name: Cache Donut Browser
-        id: cache-donut
-        uses: actions/cache@v4
-        with:
-          path: ./donut.AppImage
-          key: ${{ runner.os }}-donut-0.28.2
-
-      - name: Setup Donut Browser (fixed)
-        if: steps.cache-donut.outputs.cache-hit != 'true'
-        run: |
-          wget https://github.com/zhon/donutbrowser/releases/download/v0.28.2/Donut-0.28.2_amd64.AppImage -O donut.AppImage
-          chmod +x donut.AppImage
-
-      - name: Run Bot
-        run: |
-          python your_bot_script.py
+      - name: Start bot
+        run: python bot.py
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}

@@ -1,86 +1,59 @@
-name: Telegram Bot Runner
+name: Run Bot
 
 on:
+  push:
+    branches: [ main ]
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '0 * * * *'
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
-  run-bot:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
+          cache: 'pip'
 
-      # ----------------------------------------------
-      # CACHE: pip packages (versioned)
-      # ----------------------------------------------
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}-${{ hashFiles('.cache-version') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
 
-      # ----------------------------------------------
-      # CACHE: Playwright browsers (versioned)
-      # ----------------------------------------------
       - name: Cache Playwright browsers
+        id: cache-playwright
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}-${{ hashFiles('.cache-version') }}
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-playwright-
 
-      # ----------------------------------------------
-      # CACHE: Donut Browser (versioned)
-      # ----------------------------------------------
+      - name: Install Playwright browsers
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
+        run: |
+          playwright install --with-deps chromium
+
       - name: Cache Donut Browser
+        id: cache-donut
         uses: actions/cache@v4
         with:
-          path: |
-            donut.AppImage
-            squashfs-root/
-          key: ${{ runner.os }}-donut-${{ hashFiles('.cache-version') }}
-          restore-keys: |
-            ${{ runner.os }}-donut-
+          path: ./donut.AppImage
+          key: ${{ runner.os }}-donut-0.28.2
 
-      # ----------------------------------------------
-      # Install dependencies (pip will use cache)
-      # ----------------------------------------------
-      - name: Install dependencies
+      - name: Setup Donut Browser (fixed)
+        if: steps.cache-donut.outputs.cache-hit != 'true'
         run: |
-          pip install -r requirements.txt
-          playwright install chromium
+          wget https://github.com/zhon/donutbrowser/releases/download/v0.28.2/Donut-0.28.2_amd64.AppImage -O donut.AppImage
+          chmod +x donut.AppImage
 
-      # ----------------------------------------------
-      # Download & extract Donut (if not cached)
-      # ----------------------------------------------
-      - name: Setup Donut Browser
-        run: |
-          if [ ! -f "donut.AppImage" ]; then
-            wget -O donut.AppImage https://github.com/zhom/donutbrowser/releases/latest/download/donut-latest-x86_64.AppImage
-            chmod +x donut.AppImage
-            ./donut.AppImage --appimage-extract
-          fi
-          nohup ./squashfs-root/AppRun &
-          sleep 5
-          echo "✅ Donut Browser ready"
-
-      # ----------------------------------------------
-      # Run the bot
-      # ----------------------------------------------
       - name: Run Bot
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          echo "🚀 Starting bot..."
-          python bot.py
+          python your_bot_script.py

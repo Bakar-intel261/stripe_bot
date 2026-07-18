@@ -1,0 +1,37 @@
+name: Telegram Bot Runner
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+      
+      - name: Install Donut Browser
+        run: |
+          wget -O donut.AppImage https://github.com/DonutBrowser/donut-browser/releases/latest/download/donut-latest.AppImage
+          chmod +x donut.AppImage
+          ./donut.AppImage --appimage-extract
+          nohup ./squashfs-root/AppRun &
+          sleep 10
+      
+      - name: Run Bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python bot.py

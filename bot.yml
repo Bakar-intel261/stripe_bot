@@ -1,0 +1,57 @@
+name: Telegram Bot Runner
+
+on:
+  schedule:
+    # Check for messages every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      # 1. Checkout code
+      - uses: actions/checkout@v4
+      
+      # 2. Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      # 3. Install dependencies
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+      
+      # 4. Install Donut Browser
+      - name: Install Donut Browser
+        run: |
+          # Download Donut AppImage
+          wget -O donut.AppImage https://github.com/DonutBrowser/donut-browser/releases/latest/download/donut-latest.AppImage
+          chmod +x donut.AppImage
+          
+          # Extract AppImage
+          ./donut.AppImage --appimage-extract
+          
+          # Start Donut in background
+          nohup ./squashfs-root/AppRun &
+          
+          # Wait for Donut to start
+          sleep 10
+          
+          echo "✅ Donut Browser installed and running"
+      
+      # 5. Verify Donut is running
+      - name: Verify Donut
+        run: |
+          curl -s http://localhost:10108/health || echo "⚠️ Donut health check failed"
+      
+      # 6. Run the bot
+      - name: Run Bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python bot.py

@@ -5,6 +5,7 @@ import time
 import hashlib
 import random
 from pathlib import Path
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from chrome_fingerprints import FingerprintGenerator
 
@@ -68,8 +69,14 @@ class TaskExecutor:
         url = url.strip()
         if not url:
             return None
+        # If no scheme, try https first, then http
         if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
+            parsed = urlparse('//' + url)
+            # Validate hostname
+            if not parsed.netloc:
+                return None
+            # Prefer https, but we'll try http if https fails later
+            return 'https://' + parsed.netloc
         return url
 
     async def visit_and_screenshot(self, url: str) -> dict:
@@ -79,10 +86,12 @@ class TaskExecutor:
             logger.error(f"Invalid URL provided: {url}")
             return {"status": "error", "error": "Invalid URL"}
 
+        logger.info(f"Normalized URL: {target_url}")
+
+        # Skip proxies for now to isolate issue
+        proxy = None  # self.proxies and random.choice(self.proxies) if self.proxies else None
+
         fp = self._get_available_fingerprint()
-        proxy = None
-        if self.proxies:
-            proxy = {"server": random.choice(self.proxies)}
 
         try:
             ua = getattr(fp, 'user_agent', '') or getattr(fp, 'userAgent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -91,7 +100,6 @@ class TaskExecutor:
             locale = getattr(fp, 'locale', 'en-US') or getattr(fp, 'language', 'en-US')
             tz = getattr(fp, 'timezone', 'America/New_York') or getattr(fp, 'timezone_id', 'America/New_York')
 
-            logger.info(f"Launching browser for URL: {target_url}")
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=True,
@@ -105,7 +113,18 @@ class TaskExecutor:
                     timezone_id=tz,
                 )
                 page = await context.new_page()
-                await page.goto(target_url, wait_until="networkidle", timeout=30000)
+                logger.info(f"Navigating to: {target_url}")
+                try:
+                    await page.goto(target_url, wait_until="networkidle", timeout=30000)
+                except Exception as go_err:
+                    # Try with http if https fails
+                    if target_url.startswith('https://'):
+                        fallback_url = 'http://' + target_url[8:]
+                        logger.warning(f"HTTPS failed, trying HTTP: {fallback_url}")
+                        await page.goto(fallback_url, wait_until="networkidle", timeout=30000)
+                        target_url = fallback_url
+                    else:
+                        raise
                 await page.wait_for_timeout(3000)
                 screenshot_bytes = await page.screenshot(full_page=True)
                 title = await page.title()

@@ -40,24 +40,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming photo – process it through aiundress.cc"""
     user_id = str(update.effective_user.id)
-    photo = update.message.photo[-1]  # highest resolution
+    photo = update.message.photo[-1]
     file = await photo.get_file()
     file_bytes = await file.download_as_bytearray()
     
     status_msg = await update.message.reply_text("🔄 Processing your image...")
     
     try:
-        # Process the image
         result = await executor.process_image(bytes(file_bytes))
+        
+        # DEBUG: log the type and value
+        logger.info(f"Result type: {type(result)}")
+        logger.info(f"Result value: {result}")
+        
+        # If result is a tuple (unexpected), convert to dict with error
+        if isinstance(result, tuple):
+            logger.error(f"Unexpected tuple result: {result}")
+            await status_msg.edit_text(f"❌ Internal error: got tuple instead of dict. Please report.")
+            return
         
         if result["status"] == "success":
             image_data = base64.b64decode(result["image"])
-            # Resize to be safe
             image_data = resize_image(image_data)
             
-            # Store in user_data
             user_data[user_id] = {
                 "last_process": time.time(),
                 "result": result
@@ -69,7 +75,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=f"✨ Here's your generated image\nSize: {len(image_data)//1024} KB"
             )
         else:
-            # Check if error is about daily limit
             error_msg = result.get('error', 'Unknown error')
             if 'limit' in error_msg.lower() or 'cooldown' in error_msg.lower():
                 await status_msg.edit_text(
@@ -81,11 +86,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await status_msg.edit_text(f"❌ Processing failed: {error_msg}")
             
     except Exception as e:
-        logger.error(f"Error processing photo for user {user_id}: {e}")
+        logger.error(f"Error processing photo for user {user_id}: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Error: {str(e)}")
 
 async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Keep old command for backward compatibility
     await update.message.reply_text("Please send me a photo to process, or use /help")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):

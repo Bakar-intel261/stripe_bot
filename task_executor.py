@@ -78,7 +78,6 @@ class TaskExecutor:
         return url
 
     async def visit_and_screenshot(self, url: str) -> dict:
-        # kept for backward compatibility
         target_url = self._normalize_url(url)
         if not target_url:
             return {"status": "error", "error": "Invalid URL"}
@@ -122,10 +121,6 @@ class TaskExecutor:
             return {"status": "error", "error": str(e)}
 
     async def process_image(self, image_bytes: bytes) -> dict:
-        """
-        Upload an image to aiundress.cc, generate, and return the result image.
-        Includes debug logging and detection of daily limit / cooldown.
-        """
         target_url = "https://aiundress.cc"
         fp = self._get_available_fingerprint()
         proxy = None
@@ -153,15 +148,12 @@ class TaskExecutor:
                 logger.info("🌐 Navigating to upload page")
                 await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
-                # ---- Debug: page title and URL ----
                 logger.info(f"Page title: {await page.title()}")
                 logger.info(f"Page URL: {page.url}")
 
-                # ---- Check for cooldown / limit message BEFORE upload ----
                 page_text = await page.content()
                 if re.search(r'(limit|cooldown|try again|wait|minutes|hours|daily)', page_text, re.I):
                     logger.warning("⚠️ Cooldown/limit detected on page load – maybe fingerprint already used?")
-                    # We'll still proceed, but if generation fails we'll report it.
 
                 # ---- Upload the image ----
                 file_input = page.locator('input[type="file"]').first
@@ -170,7 +162,10 @@ class TaskExecutor:
                     raise Exception("No file input found on the page.")
 
                 logger.info("📤 Uploading image...")
-                await file_input.set_input_files(files=[("image.jpg", image_bytes, "image/jpeg")])
+                # Correct format: dict with name, mimeType, buffer
+                await file_input.set_input_files(
+                    files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}]
+                )
 
                 # ---- Click generate button ----
                 generate_btn = page.locator('button:has-text("Generate"), button:has-text("Start"), button:has-text("Process"), input[type="submit"][value*="Generate"]').first
@@ -183,15 +178,11 @@ class TaskExecutor:
                 logger.info("🔄 Clicking generate button...")
                 await generate_btn.click()
 
-                # ---- Wait for generation and check for cooldown/limit ----
-                # Wait a few seconds for any messages to appear
                 await page.wait_for_timeout(3000)
 
-                # Check for limit/cooldown message on the page
                 page_text = await page.content()
                 if re.search(r'(limit|cooldown|try again|wait|minutes|hours|daily)', page_text, re.I):
                     logger.warning("🚫 Cooldown/limit detected after generation – fingerprint may have been used before.")
-                    # Return a specific error so we can report it in the bot
                     await browser.close()
                     return {
                         "status": "error",
@@ -201,12 +192,9 @@ class TaskExecutor:
                 # ---- Wait for result image ----
                 result_img = page.locator('img[class*="result"], img[class*="output"], img[class*="generated"], div.result img, div.output img').first
                 if await result_img.count() == 0:
-                    # Fallback: wait for any image that appears after generation
                     logger.info("⏳ Waiting for result image to appear...")
-                    # Wait for new images to load (we can wait for network idle and then look for image elements)
                     await page.wait_for_timeout(5000)
                     all_images = await page.locator('img').all()
-                    # Heuristic: find an image with a data URL or blob URL
                     candidate = None
                     for img in all_images:
                         src = await img.get_attribute('src')
@@ -214,7 +202,6 @@ class TaskExecutor:
                             candidate = img
                             break
                     if not candidate:
-                        # If still no image, we fall back to full-page screenshot
                         logger.warning("ℹ️ No result image found, falling back to full-page screenshot")
                         screenshot_bytes = await page.screenshot(full_page=True)
                         await browser.close()
@@ -226,7 +213,6 @@ class TaskExecutor:
                         }
                     result_img = candidate
 
-                # Get the image source
                 src = await result_img.get_attribute('src')
                 if not src:
                     logger.warning("ℹ️ Result image has no src, using screenshot fallback")
@@ -239,7 +225,6 @@ class TaskExecutor:
                         "size": len(screenshot_bytes)
                     }
 
-                # Download the image
                 if src.startswith('data:'):
                     m = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', src)
                     if m:
@@ -247,7 +232,6 @@ class TaskExecutor:
                     else:
                         raise Exception("Cannot decode data URL")
                 else:
-                    # It's a URL – fetch it using aiohttp
                     import aiohttp
                     async with aiohttp.ClientSession() as session:
                         async with session.get(src) as resp:

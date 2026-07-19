@@ -12,21 +12,22 @@ class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
 
-    def _resize_image(self, image_bytes, max_dim=1280):
+    def _resize_image(self, image_bytes, max_width=1920):
         img = Image.open(BytesIO(image_bytes))
-        if img.width > max_dim or img.height > max_dim:
-            img.thumbnail((max_dim, max_dim), Image.LANCZOS)
-            out = BytesIO()
-            img.convert("RGB").save(out, format="JPEG", quality=95)
-            return out.getvalue()
-        return image_bytes
+        if img.width > max_width:
+            ratio = max_width / img.width
+            new_size = (max_width, int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+        out = BytesIO()
+        img.convert("RGB").save(out, format="JPEG", quality=95)
+        return out.getvalue()
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://aiundress.cc"
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        width = getattr(fp.screen_resolution, 'width', 1920) if hasattr(fp, 'screen_resolution') else 1920
-        height = getattr(fp.screen_resolution, 'height', 1080) if hasattr(fp, 'screen_resolution') else 1080
+        width = 1920
+        height = 1080
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
@@ -36,7 +37,7 @@ class TaskExecutor:
             # ---- Step 1: Landing ----
             logger.info("🌐 Navigating to upload page")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
-            screenshot = await page.screenshot(full_page=True, type="jpeg", quality=95)
+            screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page")
 
@@ -47,7 +48,7 @@ class TaskExecutor:
             logger.info("📤 Uploading image...")
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             await page.wait_for_timeout(2000)
-            screenshot = await page.screenshot(full_page=True, type="jpeg", quality=95)
+            screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📤 After upload")
 
@@ -71,47 +72,53 @@ class TaskExecutor:
                 logger.info("🔄 Clicking crop confirm...")
                 await crop_btn.click(timeout=5000)
                 await page.wait_for_timeout(2000)
-                screenshot = await page.screenshot(full_page=True, type="jpeg", quality=95)
+                screenshot = await page.screenshot(full_page=True)
                 screenshot = self._resize_image(screenshot)
                 await update.message.reply_photo(photo=BytesIO(screenshot), caption="✂️ After crop confirm")
-            else:
-                # send same as upload to keep count consistent
-                pass
 
-            # ---- Step 4: Wait for generate button to be enabled ----
-            generate_btn = page.locator('button:has-text("Generate"), button:has-text("Undress"), button:has-text("Start"), button[class*="generate"]').first
+            # ---- Step 4: Wait for generate button to become enabled ----
+            # Find the generate button (the one that becomes enabled after upload)
+            # Use a selector that targets the button with text "Generate" and is not disabled
+            generate_btn = page.locator('button:has-text("Generate"):not([disabled]):not(.disabled):not(.opacity-50)').first
             if await generate_btn.count() == 0:
-                raise Exception("No generate button found")
+                # Try without filter
+                generate_btn = page.locator('button:has-text("Generate"), button:has-text("Undress"), button:has-text("Start")').first
+                if await generate_btn.count() == 0:
+                    raise Exception("No generate button found")
             logger.info("⏳ Waiting for generate button to become active...")
-            disabled = await generate_btn.get_attribute('disabled')
-            if disabled:
-                logger.info("Generate button is disabled, waiting...")
-                for _ in range(30):  # 15 seconds
-                    disabled = await generate_btn.get_attribute('disabled')
-                    if not disabled:
-                        break
-                    await asyncio.sleep(0.5)
-            # If still disabled, continue anyway
-            logger.info("✅ Generate button is active")
+            for _ in range(30):  # up to 15 seconds
+                disabled = await generate_btn.get_attribute('disabled')
+                aria_disabled = await generate_btn.get_attribute('aria-disabled')
+                class_attr = await generate_btn.get_attribute('class') or ''
+                if not disabled and aria_disabled != 'true' and 'disabled' not in class_attr and 'opacity-50' not in class_attr:
+                    logger.info("✅ Generate button is active")
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                logger.warning("Generate button still disabled, attempting click anyway")
 
             # Get coordinates for precise click
             box = await generate_btn.bounding_box()
-            if box:
+            if not box:
+                logger.error("Cannot get bounding box, falling back to click")
+                await generate_btn.click()
+            else:
                 x = box['x'] + box['width'] / 2
                 y = box['y'] + box['height'] / 2
                 logger.info(f"📍 Generate button coordinates: ({x}, {y})")
-                # Scroll into view
                 await generate_btn.scroll_into_view_if_needed()
-                # Click via coordinates
                 await page.mouse.click(x, y)
-            else:
-                # fallback
-                await generate_btn.click()
             logger.info("🔄 Generate clicked")
 
-            # ---- Step 5: Wait for "Processing" state and screenshot ----
-            await page.wait_for_timeout(3000)
-            screenshot = await page.screenshot(full_page=True, type="jpeg", quality=95)
+            # ---- Step 5: Wait for "Processing" / "Verifying" text ----
+            await page.wait_for_timeout(2000)
+            # Look for processing text – might be a status bar or message
+            processing_text = page.locator('text=Processing, text=Verifying, text=Generating, text=Loading, text=Please wait').first
+            if await processing_text.count() > 0:
+                logger.info("✅ Processing message detected")
+            else:
+                logger.info("No explicit processing message, taking snapshot")
+            screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
 
@@ -135,7 +142,7 @@ class TaskExecutor:
 
             # ---- Step 7: Final screenshot ----
             await page.wait_for_timeout(2000)
-            screenshot = await page.screenshot(full_page=True, type="jpeg", quality=95)
+            screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="✅ Final result")
 

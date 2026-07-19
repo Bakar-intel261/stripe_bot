@@ -26,7 +26,8 @@ jobs:
             libgbm1 \
             libasound2t64 \
             libegl1 \
-            libgl1-mesa-glx \
+            libgl1 \
+            libgl1-mesa-dri \
             libxcb-xfixes0 \
             libxcb-shm0 \
             libxkbcommon0 \

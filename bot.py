@@ -1,6 +1,5 @@
 import os
 import logging
-import time
 import base64
 from io import BytesIO
 from PIL import Image
@@ -8,129 +7,50 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from task_executor import TaskExecutor
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
 executor = TaskExecutor()
-user_data = {}
 
-def resize_image(image_bytes, max_width=1280, max_height=1280):
+def resize_image(image_bytes, max_dim=1280):
     img = Image.open(BytesIO(image_bytes))
-    if img.width > max_width or img.height > max_height:
-        img.thumbnail((max_width, max_height), Image.LANCZOS)
-        output = BytesIO()
-        img.convert("RGB").save(output, format="JPEG", quality=85)
-        return output.getvalue()
+    if img.width > max_dim or img.height > max_dim:
+        img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        out = BytesIO()
+        img.convert("RGB").save(out, format="JPEG", quality=85)
+        return out.getvalue()
     return image_bytes
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(
-        f"👋 Welcome {user.first_name}!\n\n"
-        "Send me a photo and I'll process it on aiundress.cc\n"
-        "Commands:\n"
-        "/start_task - Visit aiundress.cc and get screenshot\n"
-        "/stats - View your stats\n"
-        "/help - Help"
-    )
-
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
     photo = update.message.photo[-1]
     file = await photo.get_file()
     file_bytes = await file.download_as_bytearray()
-    
-    status_msg = await update.message.reply_text("🔄 Processing your image...")
-    
+    status = await update.message.reply_text("🔄 Uploading...")
     try:
-        result = await executor.process_image(bytes(file_bytes))
-        
-        # DEBUG: log the type and value
-        logger.info(f"Result type: {type(result)}")
-        logger.info(f"Result value: {result}")
-        
-        # If result is a tuple (unexpected), convert to dict with error
-        if isinstance(result, tuple):
-            logger.error(f"Unexpected tuple result: {result}")
-            await status_msg.edit_text(f"❌ Internal error: got tuple instead of dict. Please report.")
-            return
-        
+        result = await executor.upload_and_screenshot(bytes(file_bytes))
         if result["status"] == "success":
-            image_data = base64.b64decode(result["image"])
-            image_data = resize_image(image_data)
-            
-            user_data[user_id] = {
-                "last_process": time.time(),
-                "result": result
-            }
-            
-            await status_msg.edit_text("✅ Image processed successfully!")
-            await update.message.reply_photo(
-                photo=BytesIO(image_data),
-                caption=f"✨ Here's your generated image\nSize: {len(image_data)//1024} KB"
-            )
+            img = base64.b64decode(result["screenshot"])
+            img = resize_image(img)
+            await status.delete()
+            await update.message.reply_photo(photo=BytesIO(img), caption="✅ Upload successful – page screenshot")
         else:
-            error_msg = result.get('error', 'Unknown error')
-            if 'limit' in error_msg.lower() or 'cooldown' in error_msg.lower():
-                await status_msg.edit_text(
-                    f"⛔ {error_msg}\n\n"
-                    "This might mean the site has detected repeated usage from the same fingerprint. "
-                    "The bot rotates fingerprints every 24 hours, so please wait or try again later."
-                )
-            else:
-                await status_msg.edit_text(f"❌ Processing failed: {error_msg}")
-            
+            await status.edit_text(f"❌ {result.get('error', 'Unknown error')}")
     except Exception as e:
-        logger.error(f"Error processing photo for user {user_id}: {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ Error: {str(e)}")
+        logger.error(e, exc_info=True)
+        await status.edit_text(f"❌ Error: {str(e)}")
 
-async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Please send me a photo to process, or use /help")
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if user_id not in user_data:
-        await update.message.reply_text("📊 No tasks processed yet.")
-        return
-    data = user_data[user_id]
-    await update.message.reply_text(
-        f"📊 Your Stats:\n"
-        f"✅ Last processed: {time.ctime(data['last_process'])}\n"
-        f"📸 Result size: {data['result'].get('size', 0)//1024} KB"
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Task Automation Bot\n\n"
-        "Send me a photo and I'll upload it to aiundress.cc and return the generated image.\n"
-        "Commands:\n"
-        "/start - Welcome\n"
-        "/stats - View stats\n"
-        "/help - Help\n\n"
-        "⚠️ Uses fingerprint rotation for anti-detection"
-    )
+async def start(update: Update, context):
+    await update.message.reply_text("Send me a photo, I'll upload it to aiundress.cc and send a screenshot of the page.")
 
 def main():
     if not BOT_TOKEN:
-        logger.error("❌ BOT_TOKEN not set!")
+        logger.error("Missing BOT_TOKEN")
         return
-    
-    logger.info("🚀 Starting bot...")
     app = Application.builder().token(BOT_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("start_task", start_task))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    logger.info("✅ Bot is running!")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

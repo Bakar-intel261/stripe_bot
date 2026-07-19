@@ -1,7 +1,6 @@
 import os
 import logging
 import time
-import asyncio
 import base64
 from io import BytesIO
 from telegram import Update
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+# Initialize the TaskExecutor
 executor = TaskExecutor()
 user_data = {}
 
@@ -30,12 +30,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start_task - visit aiundress.cc and send screenshot"""
     user_id = str(update.effective_user.id)
     status_msg = await update.message.reply_text("🔄 Starting task...")
     
     try:
         await status_msg.edit_text("🔄 Visiting aiundress.cc...")
-        result = await executor.visit_and_screenshot("https://aiundress.cc")
+        result = await executor.visit_and_screenshot("aiundress.cc")
         
         if result["status"] == "success":
             screenshot_data = base64.b64decode(result["screenshot"])
@@ -59,7 +60,7 @@ async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(f"❌ Task failed: {result.get('error', 'Unknown error')}")
             
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        logger.error(f"Error in start_task for user {user_id}: {e}")
         await status_msg.edit_text(f"❌ Error: {str(e)}")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,7 +83,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start_task - Visit aiundress.cc\n"
         "/stats - View stats\n"
         "/help - Help\n\n"
-        "⚠️ Uses Donut Browser (Chromium) for anti‑detection"
+        "⚠️ Uses fingerprint rotation for anti-detection"
     )
 
 def main():

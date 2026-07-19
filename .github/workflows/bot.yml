@@ -34,38 +34,47 @@ jobs:
           mkdir -p ~/.local/bin
           mv squashfs-root ~/.local/bin/donut
 
-      - name: Find Chrome binary
-        id: find_chrome
-        run: |
-          echo "📂 Contents of ~/.local/bin/donut:"
-          ls -laR ~/.local/bin/donut || true
-          echo "🔍 Searching for 'chrome' executable..."
-          CHROME_PATH=$(find ~/.local/bin/donut -type f -executable -name chrome -o -name chromium -o -name *chrome* 2>/dev/null | head -n1)
-          if [ -z "$CHROME_PATH" ]; then
-            # Also search in ~/.local/share/DonutBrowser if it exists
-            CHROME_PATH=$(find ~/.local/share/DonutBrowser -type f -executable -name chrome -o -name chromium 2>/dev/null | head -n1)
-          fi
-          if [ -z "$CHROME_PATH" ]; then
-            echo "❌ Chrome binary not found"
-            exit 1
-          fi
-          echo "✅ Found Chrome: $CHROME_PATH"
-          echo "CHROME_PATH=$CHROME_PATH" >> $GITHUB_ENV
-
-      - name: Launch Chrome (Donut) with CDP
+      - name: Launch Donut (download engine) & extract Chrome
         run: |
           export DISPLAY=:99
           export LIBGL_ALWAYS_SOFTWARE=1
           export XDG_RUNTIME_DIR=/tmp/runtime-runner
           mkdir -p $XDG_RUNTIME_DIR
 
-          echo "🚀 Launching: $CHROME_PATH"
+          DONUT_BIN=~/.local/bin/donut/usr/bin/donutbrowse
+          # Start Donut to trigger the browser download
+          xvfb-run -a --server-args="-screen 0 1024x768x24" \
+            $DONUT_BIN --no-sandbox &
+          DONUT_PID=$!
+
+          # Wait up to 2 minutes for the chrome binary
+          CHROME_PATH=""
+          for i in {1..60}; do
+            CHROME_PATH=$(find ~/.local/share/DonutBrowser/binaries -name chrome -type f | head -n1)
+            if [ -n "$CHROME_PATH" ]; then
+              echo "✅ Chrome found: $CHROME_PATH"
+              break
+            fi
+            echo "⏳ Waiting for Chrome download... ($i/60)"
+            sleep 2
+          done
+
+          # Kill the wrapper
+          kill $DONUT_PID 2>/dev/null || true
+
+          if [ -z "$CHROME_PATH" ]; then
+            echo "❌ Chrome binary not found after download"
+            exit 1
+          fi
+
+          # Launch the actual Chrome with CDP
           xvfb-run -a --server-args="-screen 0 1024x768x24" \
             "$CHROME_PATH" --remote-debugging-port=9222 --no-sandbox --disable-gpu \
             2> /tmp/chrome.log &
 
           sleep 10
 
+          # Wait for CDP to respond
           for i in {1..30}; do
             if curl -s http://localhost:9222/json/version > /dev/null; then
               echo "✅ Chrome CDP is ready"

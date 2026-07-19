@@ -34,6 +34,24 @@ jobs:
           mkdir -p ~/.local/bin
           mv squashfs-root ~/.local/bin/donut
 
+      - name: Find Chrome binary
+        id: find_chrome
+        run: |
+          echo "📂 Contents of ~/.local/bin/donut:"
+          ls -laR ~/.local/bin/donut || true
+          echo "🔍 Searching for 'chrome' executable..."
+          CHROME_PATH=$(find ~/.local/bin/donut -type f -executable -name chrome -o -name chromium -o -name *chrome* 2>/dev/null | head -n1)
+          if [ -z "$CHROME_PATH" ]; then
+            # Also search in ~/.local/share/DonutBrowser if it exists
+            CHROME_PATH=$(find ~/.local/share/DonutBrowser -type f -executable -name chrome -o -name chromium 2>/dev/null | head -n1)
+          fi
+          if [ -z "$CHROME_PATH" ]; then
+            echo "❌ Chrome binary not found"
+            exit 1
+          fi
+          echo "✅ Found Chrome: $CHROME_PATH"
+          echo "CHROME_PATH=$CHROME_PATH" >> $GITHUB_ENV
+
       - name: Launch Chrome (Donut) with CDP
         run: |
           export DISPLAY=:99
@@ -41,14 +59,7 @@ jobs:
           export XDG_RUNTIME_DIR=/tmp/runtime-runner
           mkdir -p $XDG_RUNTIME_DIR
 
-          # Find chrome inside the extracted AppImage folder
-          CHROME_PATH=$(find ~/.local/bin/donut -name chrome -type f | head -n1)
-          if [ -z "$CHROME_PATH" ]; then
-            echo "❌ Chrome binary not found in ~/.local/bin/donut"
-            exit 1
-          fi
-          echo "✅ Using Chrome: $CHROME_PATH"
-
+          echo "🚀 Launching: $CHROME_PATH"
           xvfb-run -a --server-args="-screen 0 1024x768x24" \
             "$CHROME_PATH" --remote-debugging-port=9222 --no-sandbox --disable-gpu \
             2> /tmp/chrome.log &

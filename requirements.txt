@@ -3,3 +3,4 @@ requests==2.31.0
 playwright==1.40.0
 nest-asyncio==1.6.0
 chrome-fingerprints>=1.0
+Pillow==10.1.0

@@ -3,6 +3,7 @@ import logging
 import time
 import base64
 from io import BytesIO
+from PIL import Image
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from task_executor import TaskExecutor
@@ -15,9 +16,19 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Initialize the TaskExecutor
 executor = TaskExecutor()
 user_data = {}
+
+def resize_image(image_bytes, max_width=1280, max_height=1280):
+    """Resize image to fit within max dimensions, maintain aspect ratio"""
+    img = Image.open(BytesIO(image_bytes))
+    if img.width > max_width or img.height > max_height:
+        img.thumbnail((max_width, max_height), Image.LANCZOS)
+        output = BytesIO()
+        # Save as JPEG to reduce size, use quality 85
+        img.convert("RGB").save(output, format="JPEG", quality=85)
+        return output.getvalue()
+    return image_bytes
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -30,7 +41,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start_task - visit aiundress.cc and send screenshot"""
     user_id = str(update.effective_user.id)
     status_msg = await update.message.reply_text("🔄 Starting task...")
     
@@ -40,6 +50,8 @@ async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if result["status"] == "success":
             screenshot_data = base64.b64decode(result["screenshot"])
+            # Resize if needed
+            screenshot_data = resize_image(screenshot_data)
             user_data[user_id] = {
                 "result": result,
                 "timestamp": time.time()
@@ -48,7 +60,7 @@ async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(
                 f"✅ Task completed!\n"
                 f"📄 Title: {result['title']}\n"
-                f"📸 Size: {result['size'] // 1024} KB\n"
+                f"📸 Size: {len(screenshot_data) // 1024} KB\n"
                 f"🔗 URL: {result['url']}"
             )
             

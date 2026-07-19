@@ -122,11 +122,11 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
 
-            # ---- Step 6: Wait for result image with better detection ----
-            logger.info("⏳ Waiting for result image...")
-            result_img = None
-            # Multiple selectors to catch the generated image
-            selectors = [
+            # ---- Step 6: Wait for result image (up to 120 seconds) ----
+            logger.info("⏳ Waiting for result image (up to 120s)...")
+            
+            # Define selectors to try
+            result_selectors = [
                 'img[class*="result"]',
                 'img[class*="output"]',
                 'img[class*="generated"]',
@@ -134,42 +134,39 @@ class TaskExecutor:
                 'img[data-testid*="result"]',
                 'div.result img',
                 'div.output img',
-                'div.generated img'
+                'div.generated img',
+                'img[src^="data:image"]',  # any data:image (could be upload preview)
+                'img:not([src*="logo"])'  # any image not containing 'logo'
             ]
-            for _ in range(60):  # up to 60 seconds
-                # Try each selector
-                for sel in selectors:
+            
+            result_img = None
+            found_selector = None
+            
+            for _ in range(120):  # 120 seconds
+                for sel in result_selectors:
                     try:
-                        img = page.locator(sel).first
-                        if await img.count() > 0:
+                        imgs = await page.locator(sel).all()
+                        for img in imgs:
                             box = await img.bounding_box()
                             if box and box['width'] > 0 and box['height'] > 0:
+                                # Additional filter: ensure it's not the upload preview (could check if it's a canvas or small)
+                                # For now, we accept it if it's not the first image (which might be the upload)
+                                # We'll accept any image that appears after the upload
                                 result_img = img
-                                logger.info(f"✅ Found result image with selector: {sel}")
+                                found_selector = sel
                                 break
                     except:
                         continue
+                    if result_img:
+                        break
                 if result_img:
                     break
                 await asyncio.sleep(1)
-
-            if not result_img:
-                # Fallback: look for any image that is not the upload preview (by checking src)
-                # Upload preview might be a canvas or have a specific class, but we'll try to find any image with data:image
-                all_images = await page.locator('img[src^="data:image"]').all()
-                for img in all_images:
-                    box = await img.bounding_box()
-                    if box and box['width'] > 0 and box['height'] > 0:
-                        # Check if this is likely the uploaded image (maybe it's small or same as upload)
-                        # Hard to know, but we'll accept the first one that appears after upload
-                        result_img = img
-                        logger.info("✅ Found fallback data:image")
-                        break
-
+                
             if result_img:
-                logger.info("✅ Result image found")
+                logger.info(f"✅ Result image found with selector: {found_selector}")
             else:
-                logger.warning("No result image found")
+                logger.warning("No result image found after 120s")
 
             # ---- Step 7: Final screenshot ----
             await page.wait_for_timeout(2000)

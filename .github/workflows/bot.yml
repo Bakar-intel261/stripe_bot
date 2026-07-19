@@ -24,7 +24,7 @@ jobs:
             libxcb-dri3-0 \
             libdrm2 \
             libgbm1 \
-            libasound2
+            libasound2t64
 
       - name: Download Donut AppImage
         run: |

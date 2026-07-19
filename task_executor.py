@@ -122,10 +122,8 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
 
-            # ---- Step 6: Wait for result image (up to 120 seconds) ----
-            logger.info("⏳ Waiting for result image (up to 120s)...")
-            
-            # Define selectors to try
+            # ---- Step 6: Wait full 120 seconds, observe but don't send early ----
+            logger.info("⏳ Observing for result image (up to 120s)...")
             result_selectors = [
                 'img[class*="result"]',
                 'img[class*="output"]',
@@ -135,43 +133,35 @@ class TaskExecutor:
                 'div.result img',
                 'div.output img',
                 'div.generated img',
-                'img[src^="data:image"]',  # any data:image (could be upload preview)
-                'img:not([src*="logo"])'  # any image not containing 'logo'
+                'img[src^="data:image"]',
+                'img:not([src*="logo"])'
             ]
-            
-            result_img = None
+            found = False
             found_selector = None
-            
-            for _ in range(120):  # 120 seconds
+            for i in range(120):
                 for sel in result_selectors:
                     try:
                         imgs = await page.locator(sel).all()
                         for img in imgs:
                             box = await img.bounding_box()
                             if box and box['width'] > 0 and box['height'] > 0:
-                                # Additional filter: ensure it's not the upload preview (could check if it's a canvas or small)
-                                # For now, we accept it if it's not the first image (which might be the upload)
-                                # We'll accept any image that appears after the upload
-                                result_img = img
+                                found = True
                                 found_selector = sel
+                                logger.info(f"Detected image with selector: {sel} (second {i+1})")
                                 break
                     except:
                         continue
-                    if result_img:
+                    if found:
                         break
-                if result_img:
-                    break
+                if found:
+                    # We log but do not break; continue observing
+                    found = False  # reset for next detection (optional)
                 await asyncio.sleep(1)
-                
-            if result_img:
-                logger.info(f"✅ Result image found with selector: {found_selector}")
-            else:
-                logger.warning("No result image found after 120s")
 
-            # ---- Step 7: Final screenshot ----
-            await page.wait_for_timeout(2000)
+            logger.info("⏰ 120 seconds elapsed. Taking final screenshot.")
+            # ---- Step 7: Final screenshot after full wait ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="✅ Final result")
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="✅ Final result (after 120s)")
 
             await browser.close()

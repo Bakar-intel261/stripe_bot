@@ -14,7 +14,7 @@ class TaskExecutor:
     def __init__(self,
                  used_file="used_fingerprints.json",
                  proxies_file="proxies.txt",
-                 cooldown_seconds=86400):  # 24 hours
+                 cooldown_seconds=86400):
         self.cooldown_seconds = cooldown_seconds
         self.used_file = Path(used_file)
         self.proxies = self._load_proxies(proxies_file)
@@ -41,15 +41,17 @@ class TaskExecutor:
             json.dump(used, f, indent=2)
 
     def _get_fingerprint_hash(self, fp):
-        # Combine key attributes to create a unique ID
-        key = f"{fp.user_agent}|{fp.screen_resolution.width}x{fp.screen_resolution.height}|{getattr(fp, 'locale', '')}|{getattr(fp, 'timezone', '')}"
+        ua = getattr(fp, 'user_agent', '') or getattr(fp, 'userAgent', '')
+        width = getattr(fp.screen_resolution, 'width', 0) if hasattr(fp, 'screen_resolution') else 0
+        height = getattr(fp.screen_resolution, 'height', 0) if hasattr(fp, 'screen_resolution') else 0
+        locale = getattr(fp, 'locale', '') or getattr(fp, 'language', '')
+        tz = getattr(fp, 'timezone', '') or getattr(fp, 'timezone_id', '')
+        key = f"{ua}|{width}x{height}|{locale}|{tz}"
         return hashlib.sha256(key.encode()).hexdigest()
 
     def _get_available_fingerprint(self):
         used = self._load_used()
         now = time.time()
-
-        # Try up to 100 times to find an unused fingerprint
         for _ in range(100):
             fp = self.fp_gen.get_fingerprint()
             fhash = self._get_fingerprint_hash(fp)
@@ -57,8 +59,6 @@ class TaskExecutor:
                 used[fhash] = now
                 self._save_used(used)
                 return fp
-
-        # If all are used (unlikely), clean old entries and retry
         now = time.time()
         used = {k: v for k, v in used.items() if (now - v) <= self.cooldown_seconds}
         self._save_used(used)
@@ -71,6 +71,12 @@ class TaskExecutor:
             proxy = {"server": random.choice(self.proxies)}
 
         try:
+            ua = getattr(fp, 'user_agent', '') or getattr(fp, 'userAgent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            width = getattr(fp.screen_resolution, 'width', 1920) if hasattr(fp, 'screen_resolution') else 1920
+            height = getattr(fp.screen_resolution, 'height', 1080) if hasattr(fp, 'screen_resolution') else 1080
+            locale = getattr(fp, 'locale', 'en-US') or getattr(fp, 'language', 'en-US')
+            tz = getattr(fp, 'timezone', 'America/New_York') or getattr(fp, 'timezone_id', 'America/New_York')
+
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=True,
@@ -78,10 +84,10 @@ class TaskExecutor:
                     proxy=proxy
                 )
                 context = await browser.new_context(
-                    user_agent=fp.user_agent,
-                    viewport={"width": fp.screen_resolution.width, "height": fp.screen_resolution.height},
-                    locale=getattr(fp, 'locale', 'en-US'),
-                    timezone_id=getattr(fp, 'timezone', 'America/New_York'),
+                    user_agent=ua,
+                    viewport={"width": width, "height": height},
+                    locale=locale,
+                    timezone_id=tz,
                 )
                 page = await context.new_page()
                 await page.goto(url, wait_until="networkidle", timeout=30000)

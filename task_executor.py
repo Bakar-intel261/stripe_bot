@@ -64,7 +64,21 @@ class TaskExecutor:
         self._save_used(used)
         return self._get_available_fingerprint()
 
+    def _normalize_url(self, url):
+        url = url.strip()
+        if not url:
+            return None
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+        return url
+
     async def visit_and_screenshot(self, url: str) -> dict:
+        # Normalize and validate URL
+        target_url = self._normalize_url(url)
+        if not target_url:
+            logger.error(f"Invalid URL provided: {url}")
+            return {"status": "error", "error": "Invalid URL"}
+
         fp = self._get_available_fingerprint()
         proxy = None
         if self.proxies:
@@ -77,6 +91,7 @@ class TaskExecutor:
             locale = getattr(fp, 'locale', 'en-US') or getattr(fp, 'language', 'en-US')
             tz = getattr(fp, 'timezone', 'America/New_York') or getattr(fp, 'timezone_id', 'America/New_York')
 
+            logger.info(f"Launching browser for URL: {target_url}")
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=True,
@@ -90,7 +105,7 @@ class TaskExecutor:
                     timezone_id=tz,
                 )
                 page = await context.new_page()
-                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.goto(target_url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_timeout(3000)
                 screenshot_bytes = await page.screenshot(full_page=True)
                 title = await page.title()
@@ -99,9 +114,9 @@ class TaskExecutor:
                     "status": "success",
                     "screenshot": base64.b64encode(screenshot_bytes).decode(),
                     "title": title,
-                    "url": url,
+                    "url": target_url,
                     "size": len(screenshot_bytes)
                 }
         except Exception as e:
-            logger.error(f"Task failed: {e}")
+            logger.error(f"Task failed for URL {target_url}: {e}")
             return {"status": "error", "error": str(e)}

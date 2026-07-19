@@ -41,9 +41,10 @@ jobs:
           export XDG_RUNTIME_DIR=/tmp/runtime-runner
           mkdir -p $XDG_RUNTIME_DIR
 
-          CHROME_PATH=$(find ~/.local/share/DonutBrowser/binaries -name chrome -type f | head -n1)
+          # Find chrome inside the extracted AppImage folder
+          CHROME_PATH=$(find ~/.local/bin/donut -name chrome -type f | head -n1)
           if [ -z "$CHROME_PATH" ]; then
-            echo "❌ Chrome binary not found"
+            echo "❌ Chrome binary not found in ~/.local/bin/donut"
             exit 1
           fi
           echo "✅ Using Chrome: $CHROME_PATH"

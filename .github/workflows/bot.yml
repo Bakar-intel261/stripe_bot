@@ -50,8 +50,19 @@ jobs:
 
       - name: Start Donut browser
         run: |
-          xvfb-run -a ~/.local/bin/donut/AppRun &
-          sleep 10
+          export DISPLAY=:99
+          export LIBGL_ALWAYS_SOFTWARE=1
+          export XDG_RUNTIME_DIR=/tmp/runtime-runner
+          mkdir -p $XDG_RUNTIME_DIR
+          xvfb-run -a --server-args="-screen 0 1024x768x24" \
+            ~/.local/bin/donut/AppRun --no-sandbox \
+            2> /tmp/donut.log &
+          sleep 15
+          if pgrep -f "donut/AppRun" > /dev/null; then
+            echo "✅ Donut process is running"
+          else
+            echo "❌ Donut process not found"
+          fi
           for i in {1..30}; do
             if curl -s http://localhost:10108/v1/status > /dev/null; then
               echo "✅ Donut API is ready"
@@ -60,6 +71,13 @@ jobs:
             echo "⏳ Waiting for Donut API... ($i/30)"
             sleep 2
           done
+          if ! curl -s http://localhost:10108/v1/status > /dev/null; then
+            echo "❌ Donut API not ready – showing debug info:"
+            echo "--- Donut stderr log ---"
+            cat /tmp/donut.log 2>/dev/null || echo "No log file"
+            echo "--- Running processes ---"
+            ps aux | grep donut || true
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5

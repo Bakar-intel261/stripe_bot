@@ -99,7 +99,6 @@ class TaskExecutor:
                 if await generate_btn.count() == 0:
                     raise Exception("No generate button found")
 
-            # Get coordinates and click
             box = await generate_btn.bounding_box()
             if not box:
                 raise Exception("Cannot get bounding box")
@@ -117,26 +116,56 @@ class TaskExecutor:
             await page.wait_for_timeout(500)
             logger.info("🔄 Generate clicked")
 
-            # ---- Step 5: Processing screenshot (immediate) ----
-            # Wait just a moment for the UI to update
+            # ---- Step 5: Processing screenshot ----
             await page.wait_for_timeout(2000)
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
 
-            # ---- Step 6: Wait for result image ----
+            # ---- Step 6: Wait for result image with better detection ----
             logger.info("⏳ Waiting for result image...")
             result_img = None
-            for _ in range(45):  # 45 seconds (enough for ~30s generation)
-                images = await page.locator('img[src^="data:image"], img[class*="result"], img[class*="output"], img[class*="generated"]').all()
-                for img in images:
-                    box = await img.bounding_box()
-                    if box and box['width'] > 0 and box['height'] > 0:
-                        result_img = img
-                        break
+            # Multiple selectors to catch the generated image
+            selectors = [
+                'img[class*="result"]',
+                'img[class*="output"]',
+                'img[class*="generated"]',
+                'img[alt*="result"]',
+                'img[data-testid*="result"]',
+                'div.result img',
+                'div.output img',
+                'div.generated img'
+            ]
+            for _ in range(60):  # up to 60 seconds
+                # Try each selector
+                for sel in selectors:
+                    try:
+                        img = page.locator(sel).first
+                        if await img.count() > 0:
+                            box = await img.bounding_box()
+                            if box and box['width'] > 0 and box['height'] > 0:
+                                result_img = img
+                                logger.info(f"✅ Found result image with selector: {sel}")
+                                break
+                    except:
+                        continue
                 if result_img:
                     break
                 await asyncio.sleep(1)
+
+            if not result_img:
+                # Fallback: look for any image that is not the upload preview (by checking src)
+                # Upload preview might be a canvas or have a specific class, but we'll try to find any image with data:image
+                all_images = await page.locator('img[src^="data:image"]').all()
+                for img in all_images:
+                    box = await img.bounding_box()
+                    if box and box['width'] > 0 and box['height'] > 0:
+                        # Check if this is likely the uploaded image (maybe it's small or same as upload)
+                        # Hard to know, but we'll accept the first one that appears after upload
+                        result_img = img
+                        logger.info("✅ Found fallback data:image")
+                        break
+
             if result_img:
                 logger.info("✅ Result image found")
             else:

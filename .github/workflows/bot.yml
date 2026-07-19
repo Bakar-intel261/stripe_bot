@@ -24,7 +24,7 @@ jobs:
             libxcomposite1 libxdamage1 libxrandr2 libxtst6 \
             libnss3 libatk-bridge2.0-0
 
-      - name: Download Donut AppImage
+      - name: Download and extract Donut AppImage
         run: |
           wget -O /tmp/donut.AppImage \
             https://github.com/zhom/donutbrowser/releases/download/v0.28.2/Donut_0.28.2_amd64.AppImage
@@ -34,35 +34,39 @@ jobs:
           mkdir -p ~/.local/bin
           mv squashfs-root ~/.local/bin/donut
 
-      - name: Force-enable MCP via config & env
-        run: |
-          mkdir -p ~/.config/DonutBrowser
-          mkdir -p ~/.config/donutbrowser
-          echo '{"mcp_enabled": true, "mcp_port": 10108}' | tee ~/.config/DonutBrowser/settings.json ~/.config/donutbrowser/settings.json
-
-      - name: Start Donut with API
+      - name: Launch Chrome (Donut) with CDP
         run: |
           export DISPLAY=:99
           export LIBGL_ALWAYS_SOFTWARE=1
           export XDG_RUNTIME_DIR=/tmp/runtime-runner
-          export MCP_ENABLED=true
-          export MCP_PORT=10108
           mkdir -p $XDG_RUNTIME_DIR
+
+          CHROME_PATH=$(find ~/.local/share/DonutBrowser/binaries -name chrome -type f | head -n1)
+          if [ -z "$CHROME_PATH" ]; then
+            echo "❌ Chrome binary not found"
+            exit 1
+          fi
+          echo "✅ Using Chrome: $CHROME_PATH"
+
           xvfb-run -a --server-args="-screen 0 1024x768x24" \
-            ~/.local/bin/donut/AppRun --no-sandbox --api --mcp-server --mcp-port=10108 \
-            2> /tmp/donut.log &
-          sleep 20
+            "$CHROME_PATH" --remote-debugging-port=9222 --no-sandbox --disable-gpu \
+            2> /tmp/chrome.log &
+
+          sleep 10
+
           for i in {1..30}; do
-            if curl -s http://localhost:10108/v1/status > /dev/null; then
-              echo "✅ Donut API is ready"
+            if curl -s http://localhost:9222/json/version > /dev/null; then
+              echo "✅ Chrome CDP is ready"
               break
             fi
-            echo "⏳ Waiting for Donut API... ($i/30)"
+            echo "⏳ Waiting for Chrome CDP... ($i/30)"
             sleep 2
           done
-          if ! curl -s http://localhost:10108/v1/status > /dev/null; then
-            echo "❌ API not ready – logs:"
-            cat /tmp/donut.log
+
+          if ! curl -s http://localhost:9222/json/version > /dev/null; then
+            echo "❌ CDP not ready – logs:"
+            cat /tmp/chrome.log
+            exit 1
           fi
 
       - name: Set up Python

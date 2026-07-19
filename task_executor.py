@@ -51,7 +51,7 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📤 After upload")
 
-            # ---- Step 3: Crop confirm (if present) ----
+            # ---- Step 3: Crop confirm ----
             await page.wait_for_timeout(2000)
             crop_btn = None
             for selector in [
@@ -75,42 +75,45 @@ class TaskExecutor:
                 screenshot = self._resize_image(screenshot)
                 await update.message.reply_photo(photo=BytesIO(screenshot), caption="✂️ After crop confirm")
 
-            # ---- Step 4: Wait for generate button to become enabled ----
-            generate_btn = page.locator('button:has-text("Generate"):not([disabled]):not(.disabled):not(.opacity-50)').first
-            if await generate_btn.count() == 0:
-                generate_btn = page.locator('button:has-text("Generate"), button:has-text("Undress"), button:has-text("Start")').first
-                if await generate_btn.count() == 0:
-                    raise Exception("No generate button found")
-            logger.info("⏳ Waiting for generate button to become active...")
-            for _ in range(30):
-                disabled = await generate_btn.get_attribute('disabled')
-                aria_disabled = await generate_btn.get_attribute('aria-disabled')
-                class_attr = await generate_btn.get_attribute('class') or ''
-                if not disabled and aria_disabled != 'true' and 'disabled' not in class_attr and 'opacity-50' not in class_attr:
-                    logger.info("✅ Generate button is active")
+            # ---- Step 4: Find and click generate button ----
+            logger.info("🔍 Searching for generate button...")
+
+            # Get all buttons with possible text
+            possible_texts = ["Generate", "Undress", "Start", "Generate Image", "Start Generating"]
+            for text in possible_texts:
+                buttons = await page.locator(f'button:has-text("{text}")').all()
+                if buttons:
+                    logger.info(f"Found {len(buttons)} button(s) with text '{text}'")
+                    for idx, btn in enumerate(buttons):
+                        # Log attributes
+                        disabled = await btn.get_attribute('disabled')
+                        aria_disabled = await btn.get_attribute('aria-disabled')
+                        class_attr = await btn.get_attribute('class') or ''
+                        box = await btn.bounding_box()
+                        logger.info(f"Button {idx}: disabled={disabled}, aria-disabled={aria_disabled}, class={class_attr[:50]}, box={box}")
+                        # Check if enabled and visible
+                        if not disabled and aria_disabled != 'true' and 'disabled' not in class_attr and 'opacity-50' not in class_attr and box and box['width'] > 0 and box['height'] > 0:
+                            # This is a candidate
+                            logger.info(f"✅ Found enabled button at coordinates: ({box['x'] + box['width']/2}, {box['y'] + box['height']/2})")
+                            await btn.scroll_into_view_if_needed()
+                            await page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                            logger.info("✅ Generate clicked")
+                            break
+                    else:
+                        continue
                     break
-                await asyncio.sleep(0.5)
             else:
-                logger.warning("Generate button still disabled, attempting click anyway")
+                # Fallback: try any button with 'Generate' in text
+                logger.warning("No enabled button found, trying any with 'Generate'")
+                fallback = page.locator('button:has-text("Generate")').first
+                if await fallback.count() > 0:
+                    logger.info("Clicking fallback button")
+                    await fallback.click()
+                else:
+                    raise Exception("No generate button found")
 
-            box = await generate_btn.bounding_box()
-            if not box:
-                await generate_btn.click()
-            else:
-                x = box['x'] + box['width'] / 2
-                y = box['y'] + box['height'] / 2
-                logger.info(f"📍 Generate button coordinates: ({x}, {y})")
-                await generate_btn.scroll_into_view_if_needed()
-                await page.mouse.click(x, y)
-            logger.info("🔄 Generate clicked")
-
-            # ---- Step 5: Wait for "Processing" / "Verifying" text ----
+            # ---- Step 5: Wait for processing ----
             await page.wait_for_timeout(2000)
-            processing_text = page.locator('text=Processing, text=Verifying, text=Generating, text=Loading, text=Please wait').first
-            if await processing_text.count() > 0:
-                logger.info("✅ Processing message detected")
-            else:
-                logger.info("No explicit processing message")
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")

@@ -75,14 +75,13 @@ class TaskExecutor:
                 screenshot = self._resize_image(screenshot)
                 await update.message.reply_photo(photo=BytesIO(screenshot), caption="✂️ After crop confirm")
 
-            # ---- Step 4: Find and click generate with realistic mouse events ----
+            # ---- Step 4: Find and click generate ----
             logger.info("🔍 Searching for generate button...")
             generate_btn = None
             possible_texts = ["Generate", "Undress", "Start", "Generate Image"]
             for text in possible_texts:
                 buttons = await page.locator(f'button:has-text("{text}")').all()
                 if buttons:
-                    # Find the first enabled button
                     for btn in buttons:
                         disabled = await btn.get_attribute('disabled')
                         aria_disabled = await btn.get_attribute('aria-disabled')
@@ -96,13 +95,11 @@ class TaskExecutor:
                         break
 
             if not generate_btn:
-                # Fallback: try any button containing "Generate"
-                logger.warning("No enabled button, trying any with 'Generate'")
                 generate_btn = page.locator('button:has-text("Generate")').first
                 if await generate_btn.count() == 0:
                     raise Exception("No generate button found")
 
-            # Get coordinates
+            # Get coordinates and click
             box = await generate_btn.bounding_box()
             if not box:
                 raise Exception("Cannot get bounding box")
@@ -110,48 +107,19 @@ class TaskExecutor:
             y = box['y'] + box['height'] / 2
             logger.info(f"📍 Button center: ({x}, {y})")
 
-            # Scroll into view and perform realistic click
             await generate_btn.scroll_into_view_if_needed()
-            await page.wait_for_timeout(500)  # small delay
-
-            # Hover
+            await page.wait_for_timeout(500)
             await generate_btn.hover()
             await page.wait_for_timeout(200)
-
-            # Mouse down + up (real click)
             await page.mouse.down()
             await page.wait_for_timeout(100)
             await page.mouse.up()
             await page.wait_for_timeout(500)
+            logger.info("🔄 Generate clicked")
 
-            logger.info("🔄 Generate clicked via realistic mouse events")
-
-            # Verify the button changed state (optional)
-            # Check if it became disabled or text changed
-            for _ in range(10):
-                new_class = await generate_btn.get_attribute('class') or ''
-                new_disabled = await generate_btn.get_attribute('disabled')
-                if new_disabled or 'disabled' in new_class or 'opacity' in new_class:
-                    logger.info("✅ Button state changed, click registered")
-                    break
-                await asyncio.sleep(0.5)
-            else:
-                logger.warning("Button state did not change, click may not have registered")
-
-            # ---- Step 5: Wait for processing state ----
-            logger.info("⏳ Waiting for processing state...")
-            processing_detected = False
-            for _ in range(30):  # up to 15 seconds
-                # Check for any visible text indicating processing
-                page_text = await page.content()
-                if any(word in page_text.lower() for word in ['processing', 'generating', 'verifying', 'please wait', 'loading']):
-                    processing_detected = True
-                    break
-                await asyncio.sleep(0.5)
-            if processing_detected:
-                logger.info("✅ Processing state detected")
-            else:
-                logger.warning("No processing state detected, taking screenshot anyway")
+            # ---- Step 5: Processing screenshot (immediate) ----
+            # Wait just a moment for the UI to update
+            await page.wait_for_timeout(2000)
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
@@ -159,7 +127,7 @@ class TaskExecutor:
             # ---- Step 6: Wait for result image ----
             logger.info("⏳ Waiting for result image...")
             result_img = None
-            for _ in range(90):  # up to 90 seconds
+            for _ in range(45):  # 45 seconds (enough for ~30s generation)
                 images = await page.locator('img[src^="data:image"], img[class*="result"], img[class*="output"], img[class*="generated"]').all()
                 for img in images:
                     box = await img.bounding_box()

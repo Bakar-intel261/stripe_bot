@@ -49,11 +49,12 @@ jobs:
           mkdir -p ~/.local/bin
           mv squashfs-root ~/.local/bin/donut
 
-      - name: Show Donut help
+      - name: Enable Donut API (MCP server)
         run: |
-          ~/.local/bin/donut/AppRun --help || true
+          mkdir -p ~/.config/DonutBrowser
+          echo '{"mcp_enabled": true, "mcp_port": 10108}' > ~/.config/DonutBrowser/settings.json
 
-      - name: Start Donut browser with API enabled
+      - name: Start Donut browser with API
         run: |
           export DISPLAY=:99
           export LIBGL_ALWAYS_SOFTWARE=1
@@ -63,28 +64,17 @@ jobs:
             ~/.local/bin/donut/AppRun --no-sandbox --api --api-port=10108 \
             2> /tmp/donut.log &
           sleep 15
-          echo "--- Processes ---"
-          ps aux | grep donut || true
-          echo "--- Open ports ---"
-          ss -tlnp || netstat -tlnp || true
-          echo "--- Attempt to connect ---"
-          curl -v http://localhost:10108/v1/status || true
-          for i in {1..40}; do
+          for i in {1..30}; do
             if curl -s http://localhost:10108/v1/status > /dev/null; then
               echo "✅ Donut API is ready"
               break
             fi
-            echo "⏳ Waiting for Donut API... ($i/40)"
-            sleep 3
+            echo "⏳ Waiting for Donut API... ($i/30)"
+            sleep 2
           done
           if ! curl -s http://localhost:10108/v1/status > /dev/null; then
-            echo "❌ Donut API not ready – showing debug info:"
-            echo "--- Donut stderr log ---"
-            cat /tmp/donut.log 2>/dev/null || echo "No log file"
-            echo "--- Running processes (full) ---"
-            ps aux
-            echo "--- Network listening ports ---"
-            ss -tlnp
+            echo "❌ Donut API not ready – debug info:"
+            cat /tmp/donut.log
           fi
 
       - name: Set up Python

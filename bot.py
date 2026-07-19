@@ -26,14 +26,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1]
     file = await photo.get_file()
     file_bytes = await file.download_as_bytearray()
-    status = await update.message.reply_text("🔄 Uploading...")
+    status = await update.message.reply_text("🔄 Processing...")
     try:
         result = await executor.upload_and_screenshot(bytes(file_bytes))
         if result["status"] == "success":
-            img = base64.b64decode(result["screenshot"])
-            img = resize_image(img)
             await status.delete()
-            await update.message.reply_photo(photo=BytesIO(img), caption="✅ Upload successful – page screenshot")
+            # Send each screenshot with a caption
+            captions = {
+                'landing': '🌐 Landing page',
+                'upload': '📤 After upload',
+                'crop': '✂️ After crop confirm',
+                'generating': '🔄 Generating (processing)',
+                'result': '✅ Final result'
+            }
+            for idx, label in enumerate(result['labels']):
+                img_data = base64.b64decode(result['images'][idx])
+                img_data = resize_image(img_data)
+                caption = captions.get(label, label)
+                await update.message.reply_photo(photo=BytesIO(img_data), caption=caption)
         else:
             await status.edit_text(f"❌ {result.get('error', 'Unknown error')}")
     except Exception as e:
@@ -41,7 +51,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status.edit_text(f"❌ Error: {str(e)}")
 
 async def start(update: Update, context):
-    await update.message.reply_text("Send me a photo, I'll upload it to aiundress.cc and send a screenshot of the page.")
+    await update.message.reply_text("Send me a photo, I'll process it on aiundress.cc and send step-by-step screenshots.")
 
 def main():
     if not BOT_TOKEN:

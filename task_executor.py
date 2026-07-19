@@ -12,15 +12,14 @@ class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
 
-    def _resize_image(self, image_bytes, max_width=1920):
+    def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
-        if img.width > max_width:
-            ratio = max_width / img.width
-            new_size = (max_width, int(img.height * ratio))
-            img = img.resize(new_size, Image.LANCZOS)
-        out = BytesIO()
-        img.convert("RGB").save(out, format="JPEG", quality=95)
-        return out.getvalue()
+        if img.width > max_dim or img.height > max_dim:
+            img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+            out = BytesIO()
+            img.convert("RGB").save(out, format="JPEG", quality=90)
+            return out.getvalue()
+        return image_bytes
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://aiundress.cc"
@@ -77,16 +76,13 @@ class TaskExecutor:
                 await update.message.reply_photo(photo=BytesIO(screenshot), caption="✂️ After crop confirm")
 
             # ---- Step 4: Wait for generate button to become enabled ----
-            # Find the generate button (the one that becomes enabled after upload)
-            # Use a selector that targets the button with text "Generate" and is not disabled
             generate_btn = page.locator('button:has-text("Generate"):not([disabled]):not(.disabled):not(.opacity-50)').first
             if await generate_btn.count() == 0:
-                # Try without filter
                 generate_btn = page.locator('button:has-text("Generate"), button:has-text("Undress"), button:has-text("Start")').first
                 if await generate_btn.count() == 0:
                     raise Exception("No generate button found")
             logger.info("⏳ Waiting for generate button to become active...")
-            for _ in range(30):  # up to 15 seconds
+            for _ in range(30):
                 disabled = await generate_btn.get_attribute('disabled')
                 aria_disabled = await generate_btn.get_attribute('aria-disabled')
                 class_attr = await generate_btn.get_attribute('class') or ''
@@ -97,10 +93,8 @@ class TaskExecutor:
             else:
                 logger.warning("Generate button still disabled, attempting click anyway")
 
-            # Get coordinates for precise click
             box = await generate_btn.bounding_box()
             if not box:
-                logger.error("Cannot get bounding box, falling back to click")
                 await generate_btn.click()
             else:
                 x = box['x'] + box['width'] / 2
@@ -112,12 +106,11 @@ class TaskExecutor:
 
             # ---- Step 5: Wait for "Processing" / "Verifying" text ----
             await page.wait_for_timeout(2000)
-            # Look for processing text – might be a status bar or message
             processing_text = page.locator('text=Processing, text=Verifying, text=Generating, text=Loading, text=Please wait').first
             if await processing_text.count() > 0:
                 logger.info("✅ Processing message detected")
             else:
-                logger.info("No explicit processing message, taking snapshot")
+                logger.info("No explicit processing message")
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
@@ -125,7 +118,7 @@ class TaskExecutor:
             # ---- Step 6: Wait for result image ----
             logger.info("⏳ Waiting for result image...")
             result_img = None
-            for _ in range(60):  # up to 60 seconds
+            for _ in range(60):
                 images = await page.locator('img[src^="data:image"], img[class*="result"], img[class*="output"], img[class*="generated"]').all()
                 for img in images:
                     box = await img.bounding_box()

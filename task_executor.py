@@ -4,6 +4,7 @@ import base64
 import time
 import hashlib
 import random
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
@@ -69,29 +70,21 @@ class TaskExecutor:
         url = url.strip()
         if not url:
             return None
-        # If no scheme, try https first, then http
         if not url.startswith(('http://', 'https://')):
             parsed = urlparse('//' + url)
-            # Validate hostname
             if not parsed.netloc:
                 return None
-            # Prefer https, but we'll try http if https fails later
             return 'https://' + parsed.netloc
         return url
 
     async def visit_and_screenshot(self, url: str) -> dict:
-        # Normalize and validate URL
+        # kept for backward compatibility
         target_url = self._normalize_url(url)
         if not target_url:
-            logger.error(f"Invalid URL provided: {url}")
             return {"status": "error", "error": "Invalid URL"}
 
-        logger.info(f"Normalized URL: {target_url}")
-
-        # Skip proxies for now to isolate issue
-        proxy = None  # self.proxies and random.choice(self.proxies) if self.proxies else None
-
         fp = self._get_available_fingerprint()
+        proxy = None
 
         try:
             ua = getattr(fp, 'user_agent', '') or getattr(fp, 'userAgent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -113,18 +106,7 @@ class TaskExecutor:
                     timezone_id=tz,
                 )
                 page = await context.new_page()
-                logger.info(f"Navigating to: {target_url}")
-                try:
-                    await page.goto(target_url, wait_until="networkidle", timeout=30000)
-                except Exception as go_err:
-                    # Try with http if https fails
-                    if target_url.startswith('https://'):
-                        fallback_url = 'http://' + target_url[8:]
-                        logger.warning(f"HTTPS failed, trying HTTP: {fallback_url}")
-                        await page.goto(fallback_url, wait_until="networkidle", timeout=30000)
-                        target_url = fallback_url
-                    else:
-                        raise
+                await page.goto(target_url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_timeout(3000)
                 screenshot_bytes = await page.screenshot(full_page=True)
                 title = await page.title()
@@ -137,5 +119,151 @@ class TaskExecutor:
                     "size": len(screenshot_bytes)
                 }
         except Exception as e:
-            logger.error(f"Task failed for URL {target_url}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def process_image(self, image_bytes: bytes) -> dict:
+        """
+        Upload an image to aiundress.cc, generate, and return the result image.
+        Includes debug logging and detection of daily limit / cooldown.
+        """
+        target_url = "https://aiundress.cc"
+        fp = self._get_available_fingerprint()
+        proxy = None
+
+        try:
+            ua = getattr(fp, 'user_agent', '') or getattr(fp, 'userAgent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            width = getattr(fp.screen_resolution, 'width', 1920) if hasattr(fp, 'screen_resolution') else 1920
+            height = getattr(fp.screen_resolution, 'height', 1080) if hasattr(fp, 'screen_resolution') else 1080
+            locale = getattr(fp, 'locale', 'en-US') or getattr(fp, 'language', 'en-US')
+            tz = getattr(fp, 'timezone', 'America/New_York') or getattr(fp, 'timezone_id', 'America/New_York')
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-gpu"],
+                    proxy=proxy
+                )
+                context = await browser.new_context(
+                    user_agent=ua,
+                    viewport={"width": width, "height": height},
+                    locale=locale,
+                    timezone_id=tz,
+                )
+                page = await context.new_page()
+                logger.info("🌐 Navigating to upload page")
+                await page.goto(target_url, wait_until="networkidle", timeout=30000)
+
+                # ---- Debug: page title and URL ----
+                logger.info(f"Page title: {await page.title()}")
+                logger.info(f"Page URL: {page.url}")
+
+                # ---- Check for cooldown / limit message BEFORE upload ----
+                page_text = await page.content()
+                if re.search(r'(limit|cooldown|try again|wait|minutes|hours|daily)', page_text, re.I):
+                    logger.warning("⚠️ Cooldown/limit detected on page load – maybe fingerprint already used?")
+                    # We'll still proceed, but if generation fails we'll report it.
+
+                # ---- Upload the image ----
+                file_input = page.locator('input[type="file"]').first
+                if await file_input.count() == 0:
+                    logger.error("❌ No file input found")
+                    raise Exception("No file input found on the page.")
+
+                logger.info("📤 Uploading image...")
+                await file_input.set_input_files(files=[("image.jpg", image_bytes, "image/jpeg")])
+
+                # ---- Click generate button ----
+                generate_btn = page.locator('button:has-text("Generate"), button:has-text("Start"), button:has-text("Process"), input[type="submit"][value*="Generate"]').first
+                if await generate_btn.count() == 0:
+                    generate_btn = page.locator('div[role="button"]:has-text("Generate")').first
+                if await generate_btn.count() == 0:
+                    logger.error("❌ No generate button found")
+                    raise Exception("No generate button found")
+
+                logger.info("🔄 Clicking generate button...")
+                await generate_btn.click()
+
+                # ---- Wait for generation and check for cooldown/limit ----
+                # Wait a few seconds for any messages to appear
+                await page.wait_for_timeout(3000)
+
+                # Check for limit/cooldown message on the page
+                page_text = await page.content()
+                if re.search(r'(limit|cooldown|try again|wait|minutes|hours|daily)', page_text, re.I):
+                    logger.warning("🚫 Cooldown/limit detected after generation – fingerprint may have been used before.")
+                    # Return a specific error so we can report it in the bot
+                    await browser.close()
+                    return {
+                        "status": "error",
+                        "error": "Daily limit reached. The site is asking to wait. Fingerprint may not have been rotated properly or you've hit the limit for this fingerprint."
+                    }
+
+                # ---- Wait for result image ----
+                result_img = page.locator('img[class*="result"], img[class*="output"], img[class*="generated"], div.result img, div.output img').first
+                if await result_img.count() == 0:
+                    # Fallback: wait for any image that appears after generation
+                    logger.info("⏳ Waiting for result image to appear...")
+                    # Wait for new images to load (we can wait for network idle and then look for image elements)
+                    await page.wait_for_timeout(5000)
+                    all_images = await page.locator('img').all()
+                    # Heuristic: find an image with a data URL or blob URL
+                    candidate = None
+                    for img in all_images:
+                        src = await img.get_attribute('src')
+                        if src and (src.startswith('data:image') or 'blob:' in src or 'generated' in src):
+                            candidate = img
+                            break
+                    if not candidate:
+                        # If still no image, we fall back to full-page screenshot
+                        logger.warning("ℹ️ No result image found, falling back to full-page screenshot")
+                        screenshot_bytes = await page.screenshot(full_page=True)
+                        await browser.close()
+                        return {
+                            "status": "success",
+                            "image": base64.b64encode(screenshot_bytes).decode(),
+                            "method": "screenshot_fallback",
+                            "size": len(screenshot_bytes)
+                        }
+                    result_img = candidate
+
+                # Get the image source
+                src = await result_img.get_attribute('src')
+                if not src:
+                    logger.warning("ℹ️ Result image has no src, using screenshot fallback")
+                    screenshot_bytes = await page.screenshot(full_page=True)
+                    await browser.close()
+                    return {
+                        "status": "success",
+                        "image": base64.b64encode(screenshot_bytes).decode(),
+                        "method": "screenshot_fallback",
+                        "size": len(screenshot_bytes)
+                    }
+
+                # Download the image
+                if src.startswith('data:'):
+                    m = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', src)
+                    if m:
+                        image_data = base64.b64decode(m.group(2))
+                    else:
+                        raise Exception("Cannot decode data URL")
+                else:
+                    # It's a URL – fetch it using aiohttp
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(src) as resp:
+                            if resp.status != 200:
+                                raise Exception(f"Failed to download image: {resp.status}")
+                            image_data = await resp.read()
+
+                await browser.close()
+                logger.info(f"✅ Image downloaded, size: {len(image_data)} bytes")
+                return {
+                    "status": "success",
+                    "image": base64.b64encode(image_data).decode(),
+                    "method": "downloaded",
+                    "size": len(image_data)
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Error processing image: {e}", exc_info=True)
             return {"status": "error", "error": str(e)}

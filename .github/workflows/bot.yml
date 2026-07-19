@@ -1,4 +1,4 @@
-name: Telegram Donut Bot
+name: Telegram Donut Bot (Fingerprint Rotation)
 
 on:
   workflow_dispatch:
@@ -12,95 +12,33 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libfuse2 xvfb wget \
-            libx11-xcb1 libxcb-dri3-0 libdrm2 libgbm1 \
-            libasound2t64 libegl1 libgl1 libgl1-mesa-dri libgles2 \
-            libxcb-xfixes0 libxcb-shm0 libxkbcommon0 \
-            libxcomposite1 libxdamage1 libxrandr2 libxtst6 \
-            libnss3 libatk-bridge2.0-0
-
-      - name: Download and extract Donut AppImage
-        run: |
-          wget -O /tmp/donut.AppImage \
-            https://github.com/zhom/donutbrowser/releases/download/v0.28.2/Donut_0.28.2_amd64.AppImage
-          chmod +x /tmp/donut.AppImage
-          cd /tmp
-          ./donut.AppImage --appimage-extract
-          mkdir -p ~/.local/bin
-          mv squashfs-root ~/.local/bin/donut
-
-      - name: Launch Donut (download engine) & extract Chrome
-        run: |
-          export DISPLAY=:99
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export XDG_RUNTIME_DIR=/tmp/runtime-runner
-          mkdir -p $XDG_RUNTIME_DIR
-
-          DONUT_BIN=~/.local/bin/donut/usr/bin/donutbrowse
-          # Start Donut to trigger the browser download
-          xvfb-run -a --server-args="-screen 0 1024x768x24" \
-            $DONUT_BIN --no-sandbox &
-          DONUT_PID=$!
-
-          # Wait up to 2 minutes for the chrome binary
-          CHROME_PATH=""
-          for i in {1..60}; do
-            CHROME_PATH=$(find ~/.local/share/DonutBrowser/binaries -name chrome -type f | head -n1)
-            if [ -n "$CHROME_PATH" ]; then
-              echo "✅ Chrome found: $CHROME_PATH"
-              break
-            fi
-            echo "⏳ Waiting for Chrome download... ($i/60)"
-            sleep 2
-          done
-
-          # Kill the wrapper
-          kill $DONUT_PID 2>/dev/null || true
-
-          if [ -z "$CHROME_PATH" ]; then
-            echo "❌ Chrome binary not found after download"
-            exit 1
-          fi
-
-          # Launch the actual Chrome with CDP
-          xvfb-run -a --server-args="-screen 0 1024x768x24" \
-            "$CHROME_PATH" --remote-debugging-port=9222 --no-sandbox --disable-gpu \
-            2> /tmp/chrome.log &
-
-          sleep 10
-
-          # Wait for CDP to respond
-          for i in {1..30}; do
-            if curl -s http://localhost:9222/json/version > /dev/null; then
-              echo "✅ Chrome CDP is ready"
-              break
-            fi
-            echo "⏳ Waiting for Chrome CDP... ($i/30)"
-            sleep 2
-          done
-
-          if ! curl -s http://localhost:9222/json/version > /dev/null; then
-            echo "❌ CDP not ready – logs:"
-            cat /tmp/chrome.log
-            exit 1
-          fi
+        with:
+          fetch-depth: 0   # so we can push back later
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          playwright install chromium
 
-      - name: Start bot
+      - name: Fetch free proxies (optional)
+        run: |
+          curl -sL https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all.txt -o proxies.txt || echo "No proxies fetched"
+
+      - name: Run bot
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+
+      - name: Commit updated used_fingerprints.json (if any)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add used_fingerprints.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Update fingerprint cooldown"
+          git push

@@ -1,168 +1,105 @@
 import os
-import json
 import logging
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from donut_manager import DonutManager
+import time
+import asyncio
+import base64
+from io import BytesIO
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 from task_executor import TaskExecutor
 
-# Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Bot token from environment
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Initialize managers
-donut = DonutManager()
-executor = TaskExecutor(donut)
-
-# Track user tasks (in production, use a database)
-user_tasks = {}
-user_cooldowns = {}
-
-# ==================== COMMAND HANDLERS ====================
+executor = TaskExecutor()
+user_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
     user = update.effective_user
-    welcome_message = f"""
-👋 Welcome {user.first_name}!
-
-I'm a task automation bot powered by Donut Browser.
-I can perform automated tasks without getting detected.
-
-Available commands:
-/start - Show this message
-/start_task - Start a new task
-/stats - Check your usage stats
-/help - Get help
-
-⚡ Tasks run in under 5 minutes!
-    """
-    await update.message.reply_text(welcome_message)
+    await update.message.reply_text(
+        f"👋 Welcome {user.first_name}!\n\n"
+        "Commands:\n"
+        "/start_task - Visit aiundress.cc and get screenshot\n"
+        "/stats - View your stats\n"
+        "/help - Help"
+    )
 
 async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start_task command"""
     user_id = str(update.effective_user.id)
-    current_time = datetime.now()
-    
-    # Check cooldown (24 hours)
-    if user_id in user_cooldowns:
-        last_used = user_cooldowns[user_id]
-        hours_since = (current_time - last_used).total_seconds() / 3600
-        if hours_since < 24:
-            remaining = 24 - hours_since
-            await update.message.reply_text(
-                f"⏳ Please wait {remaining:.1f} hours before starting another task."
-            )
-            return
-    
-    # Send processing message
-    status_msg = await update.message.reply_text("🔄 Starting task... Please wait.")
+    status_msg = await update.message.reply_text("🔄 Starting task...")
     
     try:
-        # Step 1: Create Donut profile
-        await status_msg.edit_text("🔄 Creating browser profile...")
-        profile_id = donut.create_profile(f"user_{user_id}")
+        await status_msg.edit_text("🔄 Visiting aiundress.cc...")
+        result = await executor.visit_and_screenshot("https://aiundress.cc")
         
-        # Step 2: Launch Donut browser
-        await status_msg.edit_text("🔄 Launching browser...")
-        cdp_port = donut.launch_profile(profile_id)
-        
-        # Step 3: Execute the task
-        await status_msg.edit_text("🔄 Executing task...")
-        result = await executor.run_task(cdp_port, user_id)
-        
-        # Step 4: Save result
-        user_tasks[user_id] = {
-            "profile_id": profile_id,
-            "result": result,
-            "timestamp": current_time.isoformat()
-        }
-        user_cooldowns[user_id] = current_time
-        
-        # Step 5: Send success
-        await status_msg.edit_text(
-            f"✅ Task completed successfully!\n\n"
-            f"📊 Result: {result}\n"
-            f"🕐 Duration: ~{result.get('duration', 'unknown')}"
-        )
-        
+        if result["status"] == "success":
+            screenshot_data = base64.b64decode(result["screenshot"])
+            user_data[user_id] = {
+                "result": result,
+                "timestamp": time.time()
+            }
+            
+            await status_msg.edit_text(
+                f"✅ Task completed!\n"
+                f"📄 Title: {result['title']}\n"
+                f"📸 Size: {result['size'] // 1024} KB\n"
+                f"🔗 URL: {result['url']}"
+            )
+            
+            await update.message.reply_photo(
+                photo=BytesIO(screenshot_data),
+                caption=f"📸 Screenshot of {result['url']}"
+            )
+        else:
+            await status_msg.edit_text(f"❌ Task failed: {result.get('error', 'Unknown error')}")
+            
     except Exception as e:
-        logger.error(f"Error in start_task for user {user_id}: {str(e)}")
-        await status_msg.edit_text(
-            f"❌ Error: {str(e)}\n\n"
-            "Please try again later or contact support."
-        )
+        logger.error(f"Error: {str(e)}")
+        await status_msg.edit_text(f"❌ Error: {str(e)}")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /stats command"""
     user_id = str(update.effective_user.id)
-    
-    if user_id not in user_tasks:
-        await update.message.reply_text("📊 You haven't completed any tasks yet.")
+    if user_id not in user_data:
+        await update.message.reply_text("📊 No tasks completed yet.")
         return
-    
-    task_data = user_tasks[user_id]
-    last_run = task_data.get("timestamp", "Never")
-    
-    stats_message = f"""
-📊 Your Usage Stats
-
-✅ Last task: {task_data.get('result', 'N/A')}
-📅 Last run: {last_run}
-🔢 Total tasks: {len(user_tasks)}
-⏳ Cooldown: {'Active' if user_id in user_cooldowns else 'Ready'}
-
-💡 You can run another task in 24 hours.
-    """
-    await update.message.reply_text(stats_message)
+    data = user_data[user_id]
+    await update.message.reply_text(
+        f"📊 Your Stats:\n"
+        f"✅ Last task: {data['result'].get('title', 'N/A')}\n"
+        f"🕐 Completed: {time.ctime(data['timestamp'])}"
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
-    help_text = """
-🤖 Task Automation Bot
-
-How it works:
-1. Send /start_task to begin
-2. Bot creates a unique browser profile
-3. Automates the task without detection
-4. Returns result within 5 minutes
-
-Limits:
-• 1 task per 24 hours per user
-• Tasks complete in < 5 minutes
-• Uses advanced anti-detection (Donut Browser)
-
-Need support? Contact @your_support
-    """
-    await update.message.reply_text(help_text)
-
-# ==================== MAIN ====================
+    await update.message.reply_text(
+        "🤖 Task Automation Bot\n\n"
+        "Commands:\n"
+        "/start - Welcome\n"
+        "/start_task - Visit aiundress.cc\n"
+        "/stats - View stats\n"
+        "/help - Help\n\n"
+        "⚠️ Uses Donut Browser (Chromium) for anti‑detection"
+    )
 
 def main():
-    """Start the bot"""
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not set!")
+        logger.error("❌ BOT_TOKEN not set!")
         return
     
-    # Create application
+    logger.info("🚀 Starting bot...")
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Add command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("start_task", start_task))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("help", help_command))
     
-    # Start bot
-    logger.info("Bot started! 🚀")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("✅ Bot is running!")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()

@@ -17,27 +17,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libfuse2 \
-            xvfb \
-            wget \
-            libx11-xcb1 \
-            libxcb-dri3-0 \
-            libdrm2 \
-            libgbm1 \
-            libasound2t64 \
-            libegl1 \
-            libgl1 \
-            libgl1-mesa-dri \
-            libgles2 \
-            libxcb-xfixes0 \
-            libxcb-shm0 \
-            libxkbcommon0 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxrandr2 \
-            libxtst6 \
-            libnss3 \
-            libatk-bridge2.0-0
+            libfuse2 xvfb wget \
+            libx11-xcb1 libxcb-dri3-0 libdrm2 libgbm1 \
+            libasound2t64 libegl1 libgl1 libgl1-mesa-dri libgles2 \
+            libxcb-xfixes0 libxcb-shm0 libxkbcommon0 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 \
+            libnss3 libatk-bridge2.0-0
 
       - name: Download Donut AppImage
         run: |
@@ -49,21 +34,24 @@ jobs:
           mkdir -p ~/.local/bin
           mv squashfs-root ~/.local/bin/donut
 
-      - name: Enable Donut API (MCP server)
+      - name: Force-enable MCP via config & env
         run: |
           mkdir -p ~/.config/DonutBrowser
-          echo '{"mcp_enabled": true, "mcp_port": 10108}' > ~/.config/DonutBrowser/settings.json
+          mkdir -p ~/.config/donutbrowser
+          echo '{"mcp_enabled": true, "mcp_port": 10108}' | tee ~/.config/DonutBrowser/settings.json ~/.config/donutbrowser/settings.json
 
-      - name: Start Donut browser with API
+      - name: Start Donut with API
         run: |
           export DISPLAY=:99
           export LIBGL_ALWAYS_SOFTWARE=1
           export XDG_RUNTIME_DIR=/tmp/runtime-runner
+          export MCP_ENABLED=true
+          export MCP_PORT=10108
           mkdir -p $XDG_RUNTIME_DIR
           xvfb-run -a --server-args="-screen 0 1024x768x24" \
-            ~/.local/bin/donut/AppRun --no-sandbox --api --api-port=10108 \
+            ~/.local/bin/donut/AppRun --no-sandbox --api --mcp-server --mcp-port=10108 \
             2> /tmp/donut.log &
-          sleep 15
+          sleep 20
           for i in {1..30}; do
             if curl -s http://localhost:10108/v1/status > /dev/null; then
               echo "✅ Donut API is ready"
@@ -73,7 +61,7 @@ jobs:
             sleep 2
           done
           if ! curl -s http://localhost:10108/v1/status > /dev/null; then
-            echo "❌ Donut API not ready – debug info:"
+            echo "❌ API not ready – logs:"
             cat /tmp/donut.log
           fi
 

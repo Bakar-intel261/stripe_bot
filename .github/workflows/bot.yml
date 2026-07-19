@@ -28,6 +28,7 @@ jobs:
             libegl1 \
             libgl1 \
             libgl1-mesa-dri \
+            libgles2 \
             libxcb-xfixes0 \
             libxcb-shm0 \
             libxkbcommon0 \

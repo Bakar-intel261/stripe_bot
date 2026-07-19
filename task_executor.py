@@ -1,77 +1,52 @@
 import asyncio
 import logging
+import base64
 from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
 class TaskExecutor:
-    """Executes automated tasks using Playwright"""
-    
-    def __init__(self, donut_manager):
-        self.donut = donut_manager
-    
-    async def run_task(self, cdp_port: int, user_id: str) -> dict:
-        """
-        Execute the main task using the Donut browser profile.
-        Customize this method for your specific task.
-        """
+    def __init__(self):
+        # No donut_manager needed – we connect directly via CDP
+        pass
+
+    async def visit_and_screenshot(self, url: str) -> dict:
         try:
             async with async_playwright() as p:
-                # Connect to Donut browser via CDP
-                browser = await p.chromium.connect_over_cdp(
-                    f"http://localhost:{cdp_port}"
-                )
-                
-                # Get or create page
-                pages = browser.contexts[0].pages
-                if pages:
-                    page = pages[0]
+                # Connect to the already‑running Chrome via CDP
+                browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+                if browser.contexts:
+                    context = browser.contexts[0]
+                    pages = context.pages
+                    if pages:
+                        page = pages[0]
+                    else:
+                        page = await context.new_page()
                 else:
-                    page = await browser.contexts[0].new_page()
-                
-                # === YOUR TASK LOGIC HERE ===
-                # Example: Visit a website and click something
-                
-                # Step 1: Navigate to target site
-                await page.goto("https://example.com", wait_until="networkidle")
-                
-                # Step 2: Wait for page to load
-                await page.wait_for_selector("body", timeout=10000)
-                
-                # Step 3: Perform actions
-                # Example: Click a button
-                # await page.click("#start-button")
-                
-                # Step 4: Wait for result
-                # await page.wait_for_selector(".result", timeout=30000)
-                
-                # Step 5: Extract result
-                result_data = await page.evaluate("""
-                    () => ({
-                        status: "success",
-                        message: document.title,
-                        url: window.location.href,
-                        timestamp: new Date().toISOString()
-                    })
-                """)
-                
-                # Step 6: Take screenshot (optional)
-                # screenshot = await page.screenshot()
-                # Save or return screenshot
-                
-                # Clean up
+                    context = await browser.new_context()
+                    page = await context.new_page()
+
+                logger.info(f"🌐 Navigating to: {url}")
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(3000)
+
+                screenshot_bytes = await page.screenshot(full_page=True)
+                screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+                title = await page.title()
+
                 await browser.close()
-                
+
                 return {
                     "status": "success",
-                    "data": result_data,
-                    "duration": "~30 seconds"
+                    "title": title,
+                    "url": url,
+                    "screenshot": screenshot_b64,
+                    "size": len(screenshot_bytes)
                 }
-                
+
         except Exception as e:
-            logger.error(f"❌ Task execution failed: {e}")
+            logger.error(f"❌ Task failed: {e}")
             return {
                 "status": "error",
-                "error": str(e),
-                "duration": "failed"
+                "error": str(e)
             }

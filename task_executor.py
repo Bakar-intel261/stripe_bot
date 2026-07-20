@@ -55,7 +55,6 @@ class TaskExecutor:
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
-            # Click age verification button
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
@@ -69,45 +68,26 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
-            # ---- Step 2: Upload ----
-            # Find the upload button by its class
-            upload_btn = page.locator('button.sf-image-to-image__upload').first
-            if await upload_btn.count() == 0:
-                raise Exception("Upload button not found")
+            # ---- Step 2: Upload directly to the hidden file input ----
+            logger.info("🔍 Looking for hidden file input...")
+            # Try multiple selectors to find the file input
+            file_input = None
+            for sel in [
+                'input[type="file"]',
+                'input[accept*="image"]',
+                'button.sf-image-to-image__upload input[type="file"]'
+            ]:
+                element = page.locator(sel).first
+                if await element.count() > 0:
+                    file_input = element
+                    logger.info(f"✅ Found file input with selector: {sel}")
+                    break
 
-            logger.info("🖱️ Clicking upload button...")
-            await upload_btn.click()
-            await page.wait_for_timeout(1000)
+            if not file_input or await file_input.count() == 0:
+                raise Exception("No file input found")
 
-            # Inject custom file input inside the upload button
-            logger.info("📤 Injecting custom file input...")
-            await page.evaluate("""
-                () => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.id = 'custom_file_input';
-                    input.style.position = 'absolute';
-                    input.style.opacity = '0';
-                    input.style.width = '100%';
-                    input.style.height = '100%';
-                    input.style.cursor = 'pointer';
-                    const btn = document.querySelector('button.sf-image-to-image__upload');
-                    if (btn) {
-                        btn.style.position = 'relative';
-                        btn.appendChild(input);
-                    } else {
-                        document.body.appendChild(input);
-                    }
-                }
-            """)
-
-            custom_input = page.locator('#custom_file_input')
-            if await custom_input.count() == 0:
-                raise Exception("Custom file input not created")
-
-            logger.info("📤 Uploading image via custom input...")
-            await custom_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+            logger.info("📤 Uploading image directly...")
+            await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             await page.wait_for_timeout(3000)
 
             # ---- Debug screenshot after upload ----
@@ -117,9 +97,8 @@ class TaskExecutor:
 
             # ---- Step 3: Handle consent popup (if appears) ----
             try:
-                # Wait for checkbox to appear (up to 10 seconds)
                 checkbox = page.locator('input[type="checkbox"]').first
-                await checkbox.wait_for(state="visible", timeout=10000)
+                await checkbox.wait_for(state="visible", timeout=8000)
                 if await checkbox.count() > 0:
                     logger.info("✅ Consent popup detected, checking checkbox...")
                     await checkbox.click()

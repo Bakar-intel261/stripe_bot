@@ -55,7 +55,6 @@ class TaskExecutor:
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
-            # Early debug screenshot
             await page.wait_for_timeout(1000)
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
@@ -69,7 +68,6 @@ class TaskExecutor:
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Screenshot 1: Landing (age accepted) ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
@@ -95,7 +93,7 @@ class TaskExecutor:
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            # ---- Step 3: Handle consent popup ----
+            # ---- Step 3: Consent popup ----
             logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
@@ -110,7 +108,6 @@ class TaskExecutor:
             if await consent_card.count() > 0 and await consent_card.is_visible():
                 logger.info("🔍 Inspecting consent card contents...")
 
-                # ---- 3a: Click the consent block (the whole div that toggles checkbox) ----
                 consent_block = consent_card.locator('div.mi-upload-consent__consent').first
                 if await consent_block.count() > 0:
                     logger.info("✅ Found consent block (div.mi-upload-consent__consent)")
@@ -119,7 +116,6 @@ class TaskExecutor:
                     logger.info("✅ Clicked consent block to toggle checkbox")
                 else:
                     logger.warning("⚠️ Consent block not found, trying to find checkbox directly")
-                    # Fallback: try to click the checkbox itself
                     checkbox = consent_card.locator('input[type="checkbox"]').first
                     if await checkbox.count() > 0:
                         await self._click_element_center(page, checkbox, "Consent checkbox (fallback)")
@@ -127,7 +123,6 @@ class TaskExecutor:
                     else:
                         logger.warning("⚠️ No checkbox or consent block found inside card")
 
-                # ---- 3b: Click Agree & continue ----
                 agree_btn = consent_card.locator('button:has-text("Agree & continue")').first
                 if await agree_btn.count() > 0:
                     logger.info("✅ Agree button found inside card")
@@ -136,7 +131,6 @@ class TaskExecutor:
                 else:
                     logger.warning("⚠️ Agree button not found inside card")
 
-                # ---- 3c: Verify popup dismissed ----
                 await page.wait_for_timeout(1000)
                 if await consent_card.count() > 0 and await consent_card.is_visible():
                     logger.warning("⚠️ Consent popup STILL visible after interaction")
@@ -148,7 +142,6 @@ class TaskExecutor:
             else:
                 logger.info("ℹ️ No consent popup card found – may not be needed")
 
-            # ---- Debug screenshot after consent ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent (debug)")
@@ -162,10 +155,55 @@ class TaskExecutor:
             else:
                 logger.warning("⚠️ No prompt input found, continuing anyway")
 
-            # ---- Step 5: Final screenshot ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📤 Uploaded & prompt entered")
 
-            logger.info("===== Process finished =====")
+            # ---- Step 5: Click Generate ----
+            logger.info("🔍 Looking for generate button...")
+            generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
+            await generate_btn.wait_for(state="visible", timeout=10000)
+            logger.info("✅ Generate button found, clicking via coordinates...")
+            await self._click_element_center(page, generate_btn, "Generate button")
+            await page.wait_for_timeout(2000)
+
+            # ---- Step 6: Wait for result image ----
+            logger.info("⏳ Waiting for result image (max 60s)...")
+            result_img = None
+            start_time = asyncio.get_event_loop().time()
+            for i in range(60):
+                elapsed = int(asyncio.get_event_loop().time() - start_time)
+                logger.info(f"🔍 Check {i+1}: Looking for result image... (elapsed {elapsed}s)")
+                images = await page.locator('img[src^="data:image"], img[class*="result"], img[class*="output"], img[class*="generated"]').all()
+                logger.info(f"   Found {len(images)} candidate image(s)")
+                for idx, img in enumerate(images):
+                    box = await img.bounding_box()
+                    src = await img.get_attribute('src') or ''
+                    logger.info(f"   Image {idx}: src={src[:50]}..., box={box}")
+                    if box and box['width'] > 0 and box['height'] > 0:
+                        result_img = img
+                        logger.info(f"✅ Result image detected at {elapsed}s (width={box['width']}, height={box['height']})")
+                        break
+                if result_img:
+                    break
+                page_text = await page.content()
+                if "credit" in page_text.lower() or "not enough" in page_text.lower():
+                    logger.warning("⚠️ Credit/error message detected: " + page_text[:200])
+                await asyncio.sleep(1)
+
+            # ---- Step 7: Final screenshot ----
+            await page.wait_for_timeout(2000)
+            screenshot = await page.screenshot(full_page=True)
+            screenshot = self._resize_image(screenshot)
+            if result_img:
+                caption = f"✅ Final result (generated at {elapsed}s)"
+            else:
+                page_text = await page.content()
+                if "credit" in page_text.lower() or "not enough" in page_text.lower():
+                    caption = "⚠️ Credit/error detected – result may not be generated"
+                else:
+                    caption = "⏱️ Timeout – no result after 60s"
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption=caption)
+            logger.info(f"===== Process finished. Result found: {result_img is not None} =====")
+
             await browser.close()

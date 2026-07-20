@@ -38,27 +38,40 @@ class TaskExecutor:
             return False
 
     async def _upload_image(self, page, image_bytes):
-        """Upload image by locating the upload area via 'Files supported' text."""
-        # Find the element containing "Files supported"
-        text_element = page.locator('text="Files supported"').first
-        if await text_element.count() == 0:
-            # Fallback: partial match
-            text_element = page.locator('text="Files supported"').first
-            if await text_element.count() == 0:
-                text_element = page.locator('text="supported"').first
-        if await text_element.count() == 0:
-            raise Exception("Could not find 'Files supported' text")
+        """Upload image by locating the upload area via 'Files supported:' text."""
+        # Try exact text with colon
+        text_selectors = [
+            'text="Files supported:"',
+            'text="Files supported"',
+            'text="supported"',
+            'div:has-text("Files supported:")',
+            'div:has-text("Files supported")'
+        ]
+        upload_area = None
+        for sel in text_selectors:
+            try:
+                element = page.locator(sel).first
+                if await element.count() > 0:
+                    logger.info(f"✅ Found text with selector: {sel}")
+                    # Get the parent div (the upload area)
+                    # Sometimes the text is inside a p or span, we need the clickable container
+                    parent = element.locator('xpath=ancestor::div[1]')
+                    if await parent.count() > 0:
+                        upload_area = parent
+                    else:
+                        upload_area = element
+                    break
+            except:
+                continue
 
-        # The upload area is the parent (or grandparent) of this text
-        # We'll click the closest div parent
-        upload_area = page.locator('div:has-text("Files supported")').first
-        if await upload_area.count() == 0:
-            upload_area = page.locator('div:has-text("supported")').first
-        if await upload_area.count() == 0:
-            raise Exception("No upload area found")
+        if not upload_area or await upload_area.count() == 0:
+            # Fallback: try to find any div with upload-related class
+            upload_area = page.locator('div[class*="drop"], div[class*="upload"], div[class*="drag"]').first
+            if await upload_area.count() == 0:
+                raise Exception("Could not find upload area")
 
-        logger.info("✅ Found upload area using 'Files supported' text")
-        # Try file chooser first
+        logger.info("✅ Upload area located, attempting upload...")
+        # Try file chooser interception
         try:
             async with page.expect_file_chooser(timeout=10000) as fc_info:
                 await upload_area.click()
@@ -69,7 +82,7 @@ class TaskExecutor:
         except Exception as e:
             logger.warning(f"File chooser failed: {e}, falling back to direct input")
 
-        # Fallback: find file input
+        # Fallback: direct file input
         file_input = page.locator('input[type="file"]').first
         if await file_input.count() > 0:
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
@@ -77,7 +90,7 @@ class TaskExecutor:
             return
 
         # Last resort: create custom input
-        logger.info("Creating custom file input")
+        logger.info("Creating custom file input via JavaScript")
         await page.evaluate("""
             () => {
                 const input = document.createElement('input');
@@ -89,7 +102,7 @@ class TaskExecutor:
                 input.style.width = '100%';
                 input.style.height = '100%';
                 input.style.cursor = 'pointer';
-                const area = document.querySelector('div:has-text("Files supported")');
+                const area = document.querySelector('div[class*="upload"], div[class*="drop"]');
                 if (area) area.appendChild(input);
                 else document.body.appendChild(input);
             }

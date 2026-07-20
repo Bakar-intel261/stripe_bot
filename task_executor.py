@@ -30,68 +30,12 @@ class TaskExecutor:
                 return
             x = box['x'] + box['width'] / 2
             y = box['y'] + box['height'] / 2
-            logger.info(f"📍 Clicking {description} at coordinates ({x:.1f}, {y:.1f})")
+            logger.info(f"📍 Clicking {description} at ({x:.1f}, {y:.1f})")
             await page.mouse.click(x, y)
             return True
         except Exception as e:
             logger.error(f"❌ Error clicking {description}: {e}")
             return False
-
-    async def _find_file_input(self, page):
-        """Find file input by clicking the upload area and waiting."""
-        # First, look for a file input directly (just in case)
-        input_el = page.locator('input[type="file"]').first
-        if await input_el.count() > 0:
-            logger.info("✅ Found file input directly")
-            return input_el
-
-        # Find the upload area (drag & drop) by text
-        upload_area = page.locator('div:has-text("Files supported"), div:has-text("drag and drop"), div:has-text("Upload your photo")').first
-        if await upload_area.count() > 0:
-            logger.info("🔍 Found upload area, clicking to reveal file input...")
-            await upload_area.click()
-            # Wait for the file input to appear
-            for _ in range(10):
-                await asyncio.sleep(0.5)
-                input_el = page.locator('input[type="file"]').first
-                if await input_el.count() > 0:
-                    logger.info("✅ File input appeared after clicking upload area")
-                    return input_el
-        else:
-            logger.warning("⚠️ Upload area not found, trying fallback...")
-
-        # Fallback: click any div with upload-related text
-        upload_candidates = page.locator('div:has-text("upload"), div:has-text("Choose"), div:has-text("Browse")')
-        if await upload_candidates.count() > 0:
-            logger.info("🔍 Found upload candidate, clicking...")
-            await upload_candidates.first.click()
-            await asyncio.sleep(1)
-            input_el = page.locator('input[type="file"]').first
-            if await input_el.count() > 0:
-                logger.info("✅ File input found after clicking upload candidate")
-                return input_el
-
-        # Use JavaScript to locate any file input
-        logger.info("🔍 Using JavaScript to locate file input...")
-        js_result = await page.evaluate("""
-            () => {
-                const inputs = document.querySelectorAll('input[type="file"]');
-                if (inputs.length > 0) {
-                    return inputs[0].outerHTML;
-                }
-                return null;
-            }
-        """)
-        if js_result:
-            logger.info("✅ JavaScript found a file input")
-            # Try to get it using the selector
-            input_el = page.locator('input[type="file"]').first
-            if await input_el.count() > 0:
-                return input_el
-
-        # Last resort: try to click any element that might trigger the upload
-        # But we'll raise an exception if still not found.
-        raise Exception("No file input found after all strategies")
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
@@ -130,11 +74,23 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
-            # ---- Step 2: Upload ----
-            logger.info("🔍 Searching for file input...")
-            file_input = await self._find_file_input(page)
-            logger.info("✅ Found file input element")
-            await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+            # ---- Step 2: Upload using file chooser interception ----
+            logger.info("🔍 Looking for upload area...")
+            # Find the upload area by text
+            upload_area = page.locator('div:has-text("Files supported"), div:has-text("Upload your photo"), div:has-text("drag and drop")').first
+            if await upload_area.count() == 0:
+                # Fallback: click any element with upload text
+                upload_area = page.locator('div:has-text("upload"), div:has-text("Choose"), div:has-text("Browse")').first
+                if await upload_area.count() == 0:
+                    raise Exception("No upload area found")
+
+            logger.info("📤 Clicking upload area and intercepting file chooser...")
+            # Intercept file chooser
+            async with page.expect_file_chooser() as fc_info:
+                await upload_area.click()
+            file_chooser = await fc_info.value
+            logger.info("✅ File chooser intercepted")
+            await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             logger.info("📤 Image uploaded")
             await page.wait_for_timeout(3000)
 

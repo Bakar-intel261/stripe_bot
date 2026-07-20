@@ -95,76 +95,51 @@ class TaskExecutor:
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            # ---- Step 3: Detailed consent popup handling with logging ----
+            # ---- Step 3: Handle consent popup ----
             logger.info("⏳ Waiting for consent popup card...")
-            
-            # 3a: Wait for the popup card to appear
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
                 await consent_card.wait_for(state="visible", timeout=8000)
                 logger.info("✅ Consent popup card is VISIBLE")
             except:
                 logger.warning("⚠️ Consent popup card did NOT appear within 8 seconds")
-                # Take a screenshot to see what's on the page
                 screenshot = await page.screenshot(full_page=True)
                 screenshot = self._resize_image(screenshot)
                 await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 No popup - page state")
-                # Continue anyway (maybe no popup needed)
 
-            # 3b: If card exists, inspect its contents
             if await consent_card.count() > 0 and await consent_card.is_visible():
                 logger.info("🔍 Inspecting consent card contents...")
-                
-                # Log the HTML of the card (first 500 chars)
-                card_html = await consent_card.inner_html()
-                logger.info(f"📄 Card HTML (first 500 chars): {card_html[:500]}")
 
-                # 3c: Try to find checkbox INSIDE the card
-                checkbox = consent_card.locator('input[type="checkbox"]').first
-                if await checkbox.count() > 0:
-                    logger.info("✅ Checkbox found INSIDE consent card!")
-                    await self._click_element_center(page, checkbox, "Consent checkbox")
+                # ---- 3a: Click the consent block (the whole div that toggles checkbox) ----
+                consent_block = consent_card.locator('div.mi-upload-consent__consent').first
+                if await consent_block.count() > 0:
+                    logger.info("✅ Found consent block (div.mi-upload-consent__consent)")
+                    await self._click_element_center(page, consent_block, "Consent block")
                     await page.wait_for_timeout(500)
+                    logger.info("✅ Clicked consent block to toggle checkbox")
                 else:
-                    logger.warning("⚠️ Checkbox NOT found inside consent card")
-                    # Log all checkboxes on the page
-                    all_checkboxes = await page.locator('input[type="checkbox"]').all()
-                    logger.info(f"🔍 Found {len(all_checkboxes)} checkbox(es) on the entire page")
-                    for idx, cb in enumerate(all_checkboxes):
-                        is_visible = await cb.is_visible()
-                        logger.info(f"   Checkbox {idx}: visible={is_visible}")
-                        if is_visible:
-                            # Try to click the first visible checkbox (might be the consent one)
-                            logger.info(f"   Clicking visible checkbox {idx} as fallback")
-                            await self._click_element_center(page, cb, f"Fallback checkbox {idx}")
-                            await page.wait_for_timeout(500)
-                            break
+                    logger.warning("⚠️ Consent block not found, trying to find checkbox directly")
+                    # Fallback: try to click the checkbox itself
+                    checkbox = consent_card.locator('input[type="checkbox"]').first
+                    if await checkbox.count() > 0:
+                        await self._click_element_center(page, checkbox, "Consent checkbox (fallback)")
+                        await page.wait_for_timeout(500)
+                    else:
+                        logger.warning("⚠️ No checkbox or consent block found inside card")
 
-                # 3d: Try to find Agree button INSIDE the card
+                # ---- 3b: Click Agree & continue ----
                 agree_btn = consent_card.locator('button:has-text("Agree & continue")').first
                 if await agree_btn.count() > 0:
-                    logger.info("✅ Agree button found INSIDE consent card!")
+                    logger.info("✅ Agree button found inside card")
                     await self._click_element_center(page, agree_btn, "Agree & continue button")
                     await page.wait_for_timeout(3000)
                 else:
-                    logger.warning("⚠️ Agree button NOT found inside consent card")
-                    # Log all buttons on the page
-                    all_buttons = await page.locator('button').all()
-                    logger.info(f"🔍 Found {len(all_buttons)} buttons on the entire page")
-                    for idx, btn in enumerate(all_buttons):
-                        text = await btn.text_content() or ""
-                        if "Agree" in text or "continue" in text.lower():
-                            logger.info(f"   Button {idx}: text='{text[:50]}'")
-                            logger.info(f"   Clicking button {idx} as fallback")
-                            await self._click_element_center(page, btn, f"Fallback button {idx}")
-                            await page.wait_for_timeout(2000)
-                            break
+                    logger.warning("⚠️ Agree button not found inside card")
 
-                # 3e: Verify if popup is dismissed
-                await page.wait_for_timeout(2000)
+                # ---- 3c: Verify popup dismissed ----
+                await page.wait_for_timeout(1000)
                 if await consent_card.count() > 0 and await consent_card.is_visible():
                     logger.warning("⚠️ Consent popup STILL visible after interaction")
-                    # Take a screenshot of the popup
                     screenshot = await page.screenshot(full_page=True)
                     screenshot = self._resize_image(screenshot)
                     await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 Popup still visible")

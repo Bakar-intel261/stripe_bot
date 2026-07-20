@@ -96,31 +96,36 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After upload (debug)")
 
-            # ---- Step 3: Handle consent popup using coordinates ----
-            logger.info("🔍 Checking for consent popup...")
+            # ---- Step 3: Handle consent popup ----
+            logger.info("🔍 Waiting for consent popup...")
             try:
-                # Wait for the checkbox to appear
+                # Wait for the consent popup card to appear (class mi-upload-consent__card)
+                consent_card = page.locator('div.mi-upload-consent__card').first
+                await consent_card.wait_for(state="visible", timeout=15000)
+                logger.info("✅ Consent popup detected")
+
+                # Find the checkbox inside the popup
                 checkbox = page.locator('input[type="checkbox"]').first
-                await checkbox.wait_for(state="visible", timeout=15000)
                 if await checkbox.count() > 0:
-                    logger.info("✅ Consent popup detected, checking checkbox via coordinates...")
+                    logger.info("✅ Checkbox found, clicking via coordinates...")
                     await self._click_element_center(page, checkbox, "Consent checkbox")
                     await page.wait_for_timeout(500)
-                    
-                    # Click "Agree & continue" via coordinates
-                    agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
-                    if await agree_btn.count() > 0:
-                        logger.info("✅ Clicking Agree & continue via coordinates...")
-                        await self._click_element_center(page, agree_btn, "Agree & continue button")
-                        await page.wait_for_timeout(3000)
-                        # Debug screenshot after consent
-                        screenshot = await page.screenshot(full_page=True)
-                        screenshot = self._resize_image(screenshot)
-                        await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent popup handled")
-                    else:
-                        logger.warning("⚠️ Agree & continue button not found")
                 else:
-                    logger.info("ℹ️ No consent popup detected")
+                    logger.warning("⚠️ Checkbox not found")
+
+                # Find and click "Agree & continue" button
+                agree_btn = page.locator('button:has-text("Agree & continue")').first
+                if await agree_btn.count() > 0:
+                    logger.info("✅ Agree & continue button found, clicking via coordinates...")
+                    await self._click_element_center(page, agree_btn, "Agree & continue button")
+                    await page.wait_for_timeout(3000)
+                else:
+                    logger.warning("⚠️ Agree & continue button not found")
+
+                # Debug screenshot after consent
+                screenshot = await page.screenshot(full_page=True)
+                screenshot = self._resize_image(screenshot)
+                await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent popup handled")
             except Exception as e:
                 logger.warning(f"Consent popup handling failed: {e}")
 

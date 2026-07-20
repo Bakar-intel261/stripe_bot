@@ -68,26 +68,29 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
-            # ---- Step 2: Upload directly to the hidden file input ----
-            logger.info("🔍 Looking for hidden file input...")
-            # Try multiple selectors to find the file input
-            file_input = None
-            for sel in [
-                'input[type="file"]',
-                'input[accept*="image"]',
-                'button.sf-image-to-image__upload input[type="file"]'
-            ]:
-                element = page.locator(sel).first
-                if await element.count() > 0:
-                    file_input = element
-                    logger.info(f"✅ Found file input with selector: {sel}")
-                    break
+            # ---- Step 2: Upload by clicking the upload area (button) ----
+            logger.info("🔍 Looking for upload area (button.sf-image-to-image__upload)...")
+            upload_btn = page.locator('button.sf-image-to-image__upload').first
+            await upload_btn.wait_for(state="visible", timeout=15000)
+            logger.info("✅ Upload button found and visible")
 
-            if not file_input or await file_input.count() == 0:
-                raise Exception("No file input found")
+            # Use file chooser interception
+            try:
+                async with page.expect_file_chooser(timeout=15000) as fc_info:
+                    logger.info("🖱️ Clicking upload button...")
+                    await upload_btn.click()
+                file_chooser = await fc_info.value
+                await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+                logger.info("📤 Image uploaded via file chooser")
+            except Exception as e:
+                logger.warning(f"File chooser failed: {e}, trying fallback...")
+                # Fallback: try to find the hidden input directly
+                file_input = page.locator('input[type="file"]').first
+                if await file_input.count() == 0:
+                    raise Exception("No file input found")
+                await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+                logger.info("📤 Image uploaded via direct input fallback")
 
-            logger.info("📤 Uploading image directly...")
-            await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             await page.wait_for_timeout(3000)
 
             # ---- Debug screenshot after upload ----

@@ -37,6 +37,51 @@ class TaskExecutor:
             logger.error(f"❌ Error clicking {description}: {e}")
             return False
 
+    async def _find_file_input(self, page):
+        """Find file input using multiple strategies"""
+        # Strategy 1: Direct selector
+        for sel in ['input[type="file"]', 'input[accept*="image"]']:
+            element = page.locator(sel).first
+            if await element.count() > 0:
+                logger.info(f"✅ Found file input with selector: {sel}")
+                return element
+        # Strategy 2: Click upload button and wait for input to appear
+        upload_btns = page.locator('button:has-text("Upload"), div:has-text("Upload"), a:has-text("Upload"), div[class*="upload"]')
+        if await upload_btns.count() > 0:
+            logger.info("🔍 Found upload button, clicking to reveal file input...")
+            await upload_btns.first.click()
+            await page.wait_for_timeout(1500)
+            # Check again
+            element = page.locator('input[type="file"]').first
+            if await element.count() > 0:
+                logger.info("✅ Found file input after clicking upload button")
+                return element
+        # Strategy 3: JavaScript to find hidden file input
+        logger.info("🔍 Using JavaScript to locate hidden file input...")
+        js_result = await page.evaluate("""
+            () => {
+                const inputs = document.querySelectorAll('input[type="file"]');
+                if (inputs.length > 0) {
+                    // Return a unique identifier for the first one
+                    for (let inp of inputs) {
+                        if (inp.offsetParent !== null || inp.style.display !== 'none' || inp.style.visibility !== 'hidden') {
+                            return inp.outerHTML;
+                        }
+                    }
+                    return inputs[0].outerHTML; // fallback
+                }
+                return null;
+            }
+        """)
+        if js_result:
+            logger.info("✅ JavaScript found a file input")
+            # We can't directly use the element from evaluate, but we can use page.locator with an attribute
+            # We'll just use the first visible one again
+            element = page.locator('input[type="file"]').first
+            if await element.count() > 0:
+                return element
+        raise Exception("No file input found after all strategies")
+
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
@@ -61,7 +106,6 @@ class TaskExecutor:
                 await self._click_element_center(page, age_btn, "Age verification button")
                 await page.wait_for_timeout(3000)
             else:
-                # Fallback
                 age_btn = page.locator('button:has-text("I Am 18")').first
                 if await age_btn.count() > 0:
                     logger.info("✅ Found age button with 'I Am 18', clicking...")
@@ -77,13 +121,7 @@ class TaskExecutor:
 
             # ---- Step 2: Upload ----
             logger.info("🔍 Searching for file input...")
-            # Directly find file input element
-            file_input = page.locator('input[type="file"]').first
-            if await file_input.count() == 0:
-                # Try with accept attribute
-                file_input = page.locator('input[accept*="image"]').first
-                if await file_input.count() == 0:
-                    raise Exception("No file input found")
+            file_input = await self._find_file_input(page)
             logger.info("✅ Found file input element")
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             logger.info("📤 Image uploaded")
@@ -148,7 +186,6 @@ class TaskExecutor:
                         break
                 if result_img:
                     break
-                # Also check for credit/error messages
                 page_text = await page.content()
                 if "credit" in page_text.lower() or "not enough" in page_text.lower():
                     logger.warning("⚠️ Credit/error message detected: " + page_text[:200])

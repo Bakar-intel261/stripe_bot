@@ -21,6 +21,23 @@ class TaskExecutor:
             return out.getvalue()
         return image_bytes
 
+    async def _click_element_center(self, page, locator, description="element"):
+        """Find element, get bounding box, click at center coordinates."""
+        try:
+            box = await locator.bounding_box()
+            if not box:
+                logger.warning(f"⚠️ Could not get bounding box for {description}")
+                await locator.click()
+                return
+            x = box['x'] + box['width'] / 2
+            y = box['y'] + box['height'] / 2
+            logger.info(f"📍 Clicking {description} at coordinates ({x:.1f}, {y:.1f})")
+            await page.mouse.click(x, y)
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error clicking {description}: {e}")
+            return False
+
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
@@ -39,22 +56,72 @@ class TaskExecutor:
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
-            age_btn = page.locator('button:has-text("I Am 18 or Older"), div:has-text("I Am 18 or Older"), a:has-text("I Am 18")').first
+            # Find age verification button and click via coordinates
+            age_btn = page.locator('button:has-text("I Am 18"), div:has-text("I Am 18"), a:has-text("I Am 18")').first
             if await age_btn.count() > 0:
-                logger.info("✅ Age verification found, clicking...")
-                await age_btn.click()
+                logger.info("✅ Age verification found, clicking via coordinates...")
+                await self._click_element_center(page, age_btn, "Age verification button")
                 await page.wait_for_timeout(2000)
             else:
                 logger.info("ℹ️ No age verification needed")
 
+            # ---- Screenshot 1: Landing ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
             # ---- Step 2: Upload ----
-            file_input = page.locator('input[type="file"]').first
-            if await file_input.count() == 0:
-                raise Exception("No file input found")
+            logger.info("🔍 Searching for file input...")
+            # Try multiple selectors for file input
+            file_input_selectors = [
+                'input[type="file"]',
+                'input[type="file"][accept*="image"]',
+                'div[class*="upload"] input[type="file"]',
+                'div[class*="dropzone"] input[type="file"]',
+                'button:has-text("Upload") ~ input[type="file"]'
+            ]
+            file_input = None
+            for sel in file_input_selectors:
+                try:
+                    element = page.locator(sel).first
+                    if await element.count() > 0:
+                        file_input = element
+                        logger.info(f"✅ Found file input with selector: {sel}")
+                        break
+                except:
+                    continue
+            if not file_input:
+                # If still not found, try to click a button that triggers file input
+                upload_btn = page.locator('button:has-text("Upload"), div:has-text("Upload"), button:has-text("Choose File")').first
+                if await upload_btn.count() > 0:
+                    logger.info("✅ Found upload button, clicking to open file dialog...")
+                    await upload_btn.click()
+                    # Now the file input should appear (or be visible)
+                    await page.wait_for_timeout(1000)
+                    file_input = page.locator('input[type="file"]').first
+            if not file_input or await file_input.count() == 0:
+                # Last resort: use JavaScript to find hidden file input
+                logger.info("⚠️ Trying JavaScript to find file input...")
+                js_input = await page.evaluate("""
+                    () => {
+                        const inputs = document.querySelectorAll('input[type="file"]');
+                        for (let inp of inputs) {
+                            if (inp.offsetParent !== null || inp.style.display !== 'none') {
+                                return inp;
+                            }
+                        }
+                        return null;
+                    }
+                """)
+                if js_input:
+                    # We can't directly use JavaScript element, but we can use it as a selector
+                    # We'll use the first visible input[type=file] again
+                    file_input = page.locator('input[type="file"]').first
+                    logger.info("✅ Found visible file input via JS")
+
+            if not file_input or await file_input.count() == 0:
+                raise Exception("No file input found after all attempts")
+
             logger.info("📤 Uploading image...")
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             await page.wait_for_timeout(3000)
@@ -67,8 +134,8 @@ class TaskExecutor:
                 await page.wait_for_timeout(500)
                 agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
                 if await agree_btn.count() > 0:
-                    logger.info("✅ Clicking Agree & continue...")
-                    await agree_btn.click()
+                    logger.info("✅ Clicking Agree & continue via coordinates...")
+                    await self._click_element_center(page, agree_btn, "Agree & continue button")
                     await page.wait_for_timeout(3000)
             else:
                 logger.info("ℹ️ No consent popup detected")
@@ -95,8 +162,8 @@ class TaskExecutor:
             generate_btn = page.locator('button:has-text("Generate"), div:has-text("Generate"), input[value*="Generate"]').first
             if await generate_btn.count() == 0:
                 raise Exception("No generate button found")
-            logger.info("🔄 Clicking generate button...")
-            await generate_btn.click()
+            logger.info("🔄 Clicking generate button via coordinates...")
+            await self._click_element_center(page, generate_btn, "Generate button")
             await page.wait_for_timeout(2000)
 
             # ---- Step 7: Wait for result (up to 60 seconds) with logging ----
@@ -131,7 +198,6 @@ class TaskExecutor:
             if result_img:
                 caption = f"✅ Final result (generated at {elapsed}s)"
             else:
-                # Check if there's an error message on the page
                 page_text = await page.content()
                 if "credit" in page_text.lower() or "not enough" in page_text.lower():
                     caption = "⚠️ Credit/error detected – result may not be generated"

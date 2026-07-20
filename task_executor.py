@@ -68,13 +68,12 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
-            # ---- Step 2: Upload by clicking the upload area (button) ----
+            # ---- Step 2: Upload ----
             logger.info("🔍 Looking for upload area (button.sf-image-to-image__upload)...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
             logger.info("✅ Upload button found and visible")
 
-            # Use file chooser interception
             try:
                 async with page.expect_file_chooser(timeout=15000) as fc_info:
                     logger.info("🖱️ Clicking upload button...")
@@ -83,13 +82,12 @@ class TaskExecutor:
                 await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via file chooser")
             except Exception as e:
-                logger.warning(f"File chooser failed: {e}, trying fallback...")
-                # Fallback: try to find the hidden input directly
+                logger.warning(f"File chooser failed: {e}, using direct input fallback")
                 file_input = page.locator('input[type="file"]').first
                 if await file_input.count() == 0:
                     raise Exception("No file input found")
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
-                logger.info("📤 Image uploaded via direct input fallback")
+                logger.info("📤 Image uploaded via direct input")
 
             await page.wait_for_timeout(3000)
 
@@ -98,19 +96,29 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After upload (debug)")
 
-            # ---- Step 3: Handle consent popup (if appears) ----
+            # ---- Step 3: Handle consent popup ----
+            logger.info("🔍 Checking for consent popup...")
             try:
+                # Wait for checkbox to appear (up to 15 seconds)
                 checkbox = page.locator('input[type="checkbox"]').first
-                await checkbox.wait_for(state="visible", timeout=8000)
+                await checkbox.wait_for(state="visible", timeout=15000)
                 if await checkbox.count() > 0:
                     logger.info("✅ Consent popup detected, checking checkbox...")
+                    # Click the checkbox using its label or the checkbox itself
                     await checkbox.click()
                     await page.wait_for_timeout(500)
-                    agree_btn = page.locator('button:has-text("Agree & continue")').first
+                    # Find and click "Agree & continue"
+                    agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
                     if await agree_btn.count() > 0:
                         logger.info("✅ Clicking Agree & continue...")
                         await self._click_element_center(page, agree_btn, "Agree & continue button")
-                        await page.wait_for_timeout(2000)
+                        await page.wait_for_timeout(3000)
+                        # Take a debug screenshot after consent
+                        screenshot = await page.screenshot(full_page=True)
+                        screenshot = self._resize_image(screenshot)
+                        await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent popup handled")
+                    else:
+                        logger.warning("⚠️ Agree & continue button not found")
                 else:
                     logger.info("ℹ️ No consent popup detected")
             except Exception as e:

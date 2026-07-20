@@ -122,46 +122,19 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
 
-            # ---- Step 6: Wait full 120 seconds, observe but don't send early ----
-            logger.info("⏳ Observing for result image (up to 120s)...")
-            result_selectors = [
-                'img[class*="result"]',
-                'img[class*="output"]',
-                'img[class*="generated"]',
-                'img[alt*="result"]',
-                'img[data-testid*="result"]',
-                'div.result img',
-                'div.output img',
-                'div.generated img',
-                'img[src^="data:image"]',
-                'img:not([src*="logo"])'
-            ]
-            found = False
-            found_selector = None
-            for i in range(120):
-                for sel in result_selectors:
-                    try:
-                        imgs = await page.locator(sel).all()
-                        for img in imgs:
-                            box = await img.bounding_box()
-                            if box and box['width'] > 0 and box['height'] > 0:
-                                found = True
-                                found_selector = sel
-                                logger.info(f"Detected image with selector: {sel} (second {i+1})")
-                                break
-                    except:
-                        continue
-                    if found:
-                        break
-                if found:
-                    # We log but do not break; continue observing
-                    found = False  # reset for next detection (optional)
+            # ---- Step 6: Wait full 8 minutes (480 seconds) ----
+            logger.info("⏳ Waiting 8 minutes for generation to complete...")
+            WAIT_SECONDS = 480  # 8 minutes
+            for i in range(WAIT_SECONDS):
+                # Optionally log progress every 30 seconds
+                if i % 30 == 0:
+                    logger.info(f"⏱️ {i}s elapsed, {WAIT_SECONDS - i}s remaining")
                 await asyncio.sleep(1)
 
-            logger.info("⏰ 120 seconds elapsed. Taking final screenshot.")
-            # ---- Step 7: Final screenshot after full wait ----
+            logger.info("⏰ 8 minutes elapsed. Taking final screenshot.")
+            # ---- Step 7: Final screenshot ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="✅ Final result (after 120s)")
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="✅ Final result (after 8 minutes)")
 
             await browser.close()

@@ -44,76 +44,61 @@ class TaskExecutor:
             return False
 
     async def _refresh_credits_proactively(self, update, page):
-        """Click coin icon, wait, go back to refresh credits."""
-        logger.info("🪙 Proactive credit refresh: clicking coin icon...")
-        coin_btn = page.locator('img[alt*="coin"], img[src*="coin"], button:has-text("Credits"), a:has-text("Credits")').first
+        """Refresh credits by clicking the coin icon (known to work)."""
+        logger.info("🪙 Refreshing credits via coin icon...")
+        coin_btn = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin_btn.count() > 0:
             await coin_btn.click()
+            logger.info("⏳ Waiting on pricing page...")
             await page.wait_for_timeout(3000)
-            await self._send_screenshot(update, page, "🪙 Pricing / Credits page after coin click")
-            await page.wait_for_timeout(2000)
+            await self._send_screenshot(update, page, "🪙 Pricing page after coin click")
             logger.info("🔙 Going back to generation page...")
             await page.go_back()
             await page.wait_for_timeout(3000)
-            await self._send_screenshot(update, page, "🔙 Returned to generation page after credit refresh")
+            await self._send_screenshot(update, page, "🔙 Returned after refresh")
             return True
         else:
-            logger.warning("⚠️ Coin/credit button not found")
+            logger.warning("Coin icon not found; cannot refresh.")
             return False
 
     async def _get_credits(self, page):
-        """Extract credit balance from the coin icon's sibling text."""
-        # Look for the coin icon
-        coin = page.locator('img[alt*="coin"], img[src*="coin"]').first
-        if await coin.count() == 0:
-            logger.warning("No coin icon found")
-            return None
-        # Get the parent element (often a flex container)
-        parent = coin.locator('..')
-        if await parent.count() == 0:
-            logger.warning("No parent for coin icon")
-            return None
-        # Get all text from the parent
-        text = await parent.text_content()
-        logger.info(f"Text near coin icon: {text}")
-        # Extract numbers
-        numbers = re.findall(r'\d+', text)
-        if numbers:
-            # Usually the first number is the balance
-            balance = int(numbers[0])
-            logger.info(f"Extracted credit balance: {balance}")
-            return balance
-        # Fallback: search whole page
+        """Extract credit balance from the coin icon's parent text."""
+        # Find the coin icon
+        coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
+        if await coin.count() > 0:
+            # Get the parent (the container with the balance)
+            parent = coin.locator('..')
+            if await parent.count() > 0:
+                text = await parent.text_content()
+                logger.info(f"Text from coin parent: {text}")
+                # Extract all numbers
+                numbers = re.findall(r'\d+', text)
+                if numbers:
+                    # The first number is likely the balance
+                    balance = int(numbers[0])
+                    logger.info(f"Detected balance: {balance}")
+                    return balance
+        # Fallback: look for "Credits" text and a number near it
         page_text = await page.content()
-        match = re.search(r'credits?\s*:?\s*(\d+)', page_text, re.I)
+        match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
         if match:
-            return int(match.group(1))
+            balance = int(match.group(1))
+            logger.info(f"Detected balance via 'Credits' text: {balance}")
+            return balance
         return None
 
-    async def _ensure_credits(self, page):
-        """Ensure at least 10 credits; refresh if not."""
+    async def _ensure_credits(self, page, update):
+        """Check credits; if 0, abort."""
         credits = await self._get_credits(page)
         if credits is None:
-            logger.warning("Could not determine credits, assuming OK")
-            return True
+            logger.warning("Could not read credits. Assuming insufficient, aborting.")
+            return False
         if credits >= 10:
             logger.info(f"✅ Sufficient credits: {credits}")
             return True
-        logger.warning(f"⚠️ Insufficient credits: {credits}. Refreshing...")
-        coin_btn = page.locator('img[alt*="coin"], img[src*="coin"]').first
-        if await coin_btn.count() > 0:
-            await coin_btn.click()
-            await page.wait_for_timeout(5000)
-            await page.go_back()
-            await page.wait_for_timeout(3000)
-            new_credits = await self._get_credits(page)
-            if new_credits is not None and new_credits >= 10:
-                logger.info(f"✅ Credits refreshed to {new_credits}")
-                return True
-            else:
-                logger.warning(f"Still insufficient: {new_credits}")
-                return False
-        return False
+        else:
+            logger.warning(f"⚠️ Insufficient credits: {credits} (need 10). Aborting.")
+            return False
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
@@ -242,26 +227,25 @@ class TaskExecutor:
                 await page.wait_for_timeout(1000)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
-            # ---- Step 7: Credit check before generate ----
+            # ---- Step 7: Check credits before generate ----
             logger.info("💰 Checking credits before generate...")
-            if not await self._ensure_credits(page):
-                logger.error("Insufficient credits after refresh, aborting")
-                await self._send_screenshot(update, page, "⛔ Not enough credits")
-                await update.message.reply_text("Insufficient credits (need 10). Please try a different fingerprint or later.")
+            if not await self._ensure_credits(page, update):
+                logger.error("Insufficient credits, aborting")
+                await self._send_screenshot(update, page, "⛔ Not enough credits (0)")
+                await update.message.reply_text("Insufficient credits (0). Please try a different fingerprint or later.")
                 await browser.close()
                 return
-            await self._send_screenshot(update, page, "💰 Credits OK")
+            await self._send_screenshot(update, page, "💰 Credits OK (10+)")
 
             # ---- Step 8: Click Generate ----
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
             if await generate_btn.get_attribute('disabled'):
-                logger.warning("⚠️ Generate button is disabled")
-                if not await self._ensure_credits(page):
-                    await self._send_screenshot(update, page, "⛔ Generate disabled, no credits")
-                    await browser.close()
-                    return
+                logger.warning("⚠️ Generate button is disabled, aborting")
+                await self._send_screenshot(update, page, "⛔ Generate disabled")
+                await browser.close()
+                return
             await self._click_element_center(page, generate_btn, "Generate button")
             await page.wait_for_timeout(2000)
             await self._send_screenshot(update, page, "⚡ Generate clicked")

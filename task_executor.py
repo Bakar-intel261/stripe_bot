@@ -38,48 +38,59 @@ class TaskExecutor:
             return False
 
     async def _find_file_input(self, page):
-        """Find file input using multiple strategies"""
-        # Strategy 1: Direct selector
-        for sel in ['input[type="file"]', 'input[accept*="image"]']:
-            element = page.locator(sel).first
-            if await element.count() > 0:
-                logger.info(f"✅ Found file input with selector: {sel}")
-                return element
-        # Strategy 2: Click upload button and wait for input to appear
-        upload_btns = page.locator('button:has-text("Upload"), div:has-text("Upload"), a:has-text("Upload"), div[class*="upload"]')
-        if await upload_btns.count() > 0:
-            logger.info("🔍 Found upload button, clicking to reveal file input...")
-            await upload_btns.first.click()
-            await page.wait_for_timeout(1500)
-            # Check again
-            element = page.locator('input[type="file"]').first
-            if await element.count() > 0:
-                logger.info("✅ Found file input after clicking upload button")
-                return element
-        # Strategy 3: JavaScript to find hidden file input
-        logger.info("🔍 Using JavaScript to locate hidden file input...")
+        """Find file input by clicking the upload area and waiting."""
+        # First, look for a file input directly (just in case)
+        input_el = page.locator('input[type="file"]').first
+        if await input_el.count() > 0:
+            logger.info("✅ Found file input directly")
+            return input_el
+
+        # Find the upload area (drag & drop) by text
+        upload_area = page.locator('div:has-text("Files supported"), div:has-text("drag and drop"), div:has-text("Upload your photo")').first
+        if await upload_area.count() > 0:
+            logger.info("🔍 Found upload area, clicking to reveal file input...")
+            await upload_area.click()
+            # Wait for the file input to appear
+            for _ in range(10):
+                await asyncio.sleep(0.5)
+                input_el = page.locator('input[type="file"]').first
+                if await input_el.count() > 0:
+                    logger.info("✅ File input appeared after clicking upload area")
+                    return input_el
+        else:
+            logger.warning("⚠️ Upload area not found, trying fallback...")
+
+        # Fallback: click any div with upload-related text
+        upload_candidates = page.locator('div:has-text("upload"), div:has-text("Choose"), div:has-text("Browse")')
+        if await upload_candidates.count() > 0:
+            logger.info("🔍 Found upload candidate, clicking...")
+            await upload_candidates.first.click()
+            await asyncio.sleep(1)
+            input_el = page.locator('input[type="file"]').first
+            if await input_el.count() > 0:
+                logger.info("✅ File input found after clicking upload candidate")
+                return input_el
+
+        # Use JavaScript to locate any file input
+        logger.info("🔍 Using JavaScript to locate file input...")
         js_result = await page.evaluate("""
             () => {
                 const inputs = document.querySelectorAll('input[type="file"]');
                 if (inputs.length > 0) {
-                    // Return a unique identifier for the first one
-                    for (let inp of inputs) {
-                        if (inp.offsetParent !== null || inp.style.display !== 'none' || inp.style.visibility !== 'hidden') {
-                            return inp.outerHTML;
-                        }
-                    }
-                    return inputs[0].outerHTML; // fallback
+                    return inputs[0].outerHTML;
                 }
                 return null;
             }
         """)
         if js_result:
             logger.info("✅ JavaScript found a file input")
-            # We can't directly use the element from evaluate, but we can use page.locator with an attribute
-            # We'll just use the first visible one again
-            element = page.locator('input[type="file"]').first
-            if await element.count() > 0:
-                return element
+            # Try to get it using the selector
+            input_el = page.locator('input[type="file"]').first
+            if await input_el.count() > 0:
+                return input_el
+
+        # Last resort: try to click any element that might trigger the upload
+        # But we'll raise an exception if still not found.
         raise Exception("No file input found after all strategies")
 
     async def process_photo(self, update, image_bytes):

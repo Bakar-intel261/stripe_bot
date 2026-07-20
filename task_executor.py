@@ -55,7 +55,7 @@ class TaskExecutor:
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
-            # Take screenshot 1 second after load
+            # Early debug screenshot
             await page.wait_for_timeout(1000)
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
@@ -95,62 +95,83 @@ class TaskExecutor:
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            # Wait for consent popup
-            logger.info("⏳ Waiting 2 seconds for consent popup...")
-            await page.wait_for_timeout(2000)
-
-            # ---- Step 3: Handle consent popup with multiple methods ----
-            consent_handled = False
-            logger.info("🔍 Handling consent popup...")
+            # ---- Step 3: Detailed consent popup handling with logging ----
+            logger.info("⏳ Waiting for consent popup card...")
+            
+            # 3a: Wait for the popup card to appear
+            consent_card = page.locator('div.mi-upload-consent__card').first
             try:
-                # Method 1: Wait for checkbox and click with JS
-                checkbox = page.locator('input[type="checkbox"]').first
+                await consent_card.wait_for(state="visible", timeout=8000)
+                logger.info("✅ Consent popup card is VISIBLE")
+            except:
+                logger.warning("⚠️ Consent popup card did NOT appear within 8 seconds")
+                # Take a screenshot to see what's on the page
+                screenshot = await page.screenshot(full_page=True)
+                screenshot = self._resize_image(screenshot)
+                await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 No popup - page state")
+                # Continue anyway (maybe no popup needed)
+
+            # 3b: If card exists, inspect its contents
+            if await consent_card.count() > 0 and await consent_card.is_visible():
+                logger.info("🔍 Inspecting consent card contents...")
+                
+                # Log the HTML of the card (first 500 chars)
+                card_html = await consent_card.inner_html()
+                logger.info(f"📄 Card HTML (first 500 chars): {card_html[:500]}")
+
+                # 3c: Try to find checkbox INSIDE the card
+                checkbox = consent_card.locator('input[type="checkbox"]').first
                 if await checkbox.count() > 0:
-                    logger.info("✅ Checkbox found, clicking via JS...")
-                    await checkbox.check()  # Playwright's built-in check
+                    logger.info("✅ Checkbox found INSIDE consent card!")
+                    await self._click_element_center(page, checkbox, "Consent checkbox")
                     await page.wait_for_timeout(500)
-                    consent_handled = True
                 else:
-                    logger.warning("⚠️ Checkbox not found with locator")
+                    logger.warning("⚠️ Checkbox NOT found inside consent card")
+                    # Log all checkboxes on the page
+                    all_checkboxes = await page.locator('input[type="checkbox"]').all()
+                    logger.info(f"🔍 Found {len(all_checkboxes)} checkbox(es) on the entire page")
+                    for idx, cb in enumerate(all_checkboxes):
+                        is_visible = await cb.is_visible()
+                        logger.info(f"   Checkbox {idx}: visible={is_visible}")
+                        if is_visible:
+                            # Try to click the first visible checkbox (might be the consent one)
+                            logger.info(f"   Clicking visible checkbox {idx} as fallback")
+                            await self._click_element_center(page, cb, f"Fallback checkbox {idx}")
+                            await page.wait_for_timeout(500)
+                            break
 
-                # Find and click Agree & continue button
-                agree_btn = page.locator('button:has-text("Agree & continue")').first
+                # 3d: Try to find Agree button INSIDE the card
+                agree_btn = consent_card.locator('button:has-text("Agree & continue")').first
                 if await agree_btn.count() > 0:
-                    logger.info("✅ Agree button found, clicking via coordinates...")
+                    logger.info("✅ Agree button found INSIDE consent card!")
                     await self._click_element_center(page, agree_btn, "Agree & continue button")
-                    await page.wait_for_timeout(2000)
-                    consent_handled = True
+                    await page.wait_for_timeout(3000)
                 else:
-                    logger.warning("⚠️ Agree button not found with locator")
-            except Exception as e:
-                logger.warning(f"First consent method failed: {e}")
+                    logger.warning("⚠️ Agree button NOT found inside consent card")
+                    # Log all buttons on the page
+                    all_buttons = await page.locator('button').all()
+                    logger.info(f"🔍 Found {len(all_buttons)} buttons on the entire page")
+                    for idx, btn in enumerate(all_buttons):
+                        text = await btn.text_content() or ""
+                        if "Agree" in text or "continue" in text.lower():
+                            logger.info(f"   Button {idx}: text='{text[:50]}'")
+                            logger.info(f"   Clicking button {idx} as fallback")
+                            await self._click_element_center(page, btn, f"Fallback button {idx}")
+                            await page.wait_for_timeout(2000)
+                            break
 
-            if not consent_handled:
-                # Method 2: Use JavaScript to click all possible elements
-                logger.info("🛠️ Trying JavaScript fallback for consent popup...")
-                result = await page.evaluate("""
-                    () => {
-                        let clicked = false;
-                        // Click checkbox
-                        const cb = document.querySelector('input[type="checkbox"]');
-                        if (cb) { cb.click(); clicked = true; }
-                        // Click Agree button
-                        const btns = document.querySelectorAll('button');
-                        for (let b of btns) {
-                            if (b.textContent && b.textContent.includes('Agree')) {
-                                b.click();
-                                clicked = true;
-                                break;
-                            }
-                        }
-                        return clicked;
-                    }
-                """)
-                if result:
-                    logger.info("✅ Consent handled via JS fallback")
-                    await page.wait_for_timeout(2000)
+                # 3e: Verify if popup is dismissed
+                await page.wait_for_timeout(2000)
+                if await consent_card.count() > 0 and await consent_card.is_visible():
+                    logger.warning("⚠️ Consent popup STILL visible after interaction")
+                    # Take a screenshot of the popup
+                    screenshot = await page.screenshot(full_page=True)
+                    screenshot = self._resize_image(screenshot)
+                    await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 Popup still visible")
                 else:
-                    logger.warning("⚠️ Consent not handled – may not be needed")
+                    logger.info("✅ Consent popup successfully dismissed")
+            else:
+                logger.info("ℹ️ No consent popup card found – may not be needed")
 
             # ---- Debug screenshot after consent ----
             screenshot = await page.screenshot(full_page=True)

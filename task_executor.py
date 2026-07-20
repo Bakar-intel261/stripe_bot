@@ -22,7 +22,7 @@ class TaskExecutor:
         return image_bytes
 
     async def process_photo(self, update, image_bytes):
-        target_url = "https://aiundress.cc"
+        target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         width = 1920
@@ -33,12 +33,23 @@ class TaskExecutor:
             context = await browser.new_context(user_agent=ua, viewport={"width": width, "height": height})
             page = await context.new_page()
 
-            # ---- Step 1: Landing ----
-            logger.info("🌐 Navigating to upload page")
+            logger.info("===== Starting process =====")
+
+            # ---- Step 1: Landing & Age Verification ----
+            logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
+
+            age_btn = page.locator('button:has-text("I Am 18 or Older"), div:has-text("I Am 18 or Older"), a:has-text("I Am 18")').first
+            if await age_btn.count() > 0:
+                logger.info("✅ Age verification found, clicking...")
+                await age_btn.click()
+                await page.wait_for_timeout(2000)
+            else:
+                logger.info("ℹ️ No age verification needed")
+
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page")
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
             # ---- Step 2: Upload ----
             file_input = page.locator('input[type="file"]').first
@@ -46,141 +57,87 @@ class TaskExecutor:
                 raise Exception("No file input found")
             logger.info("📤 Uploading image...")
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
-            await page.wait_for_timeout(2000)
-            screenshot = await page.screenshot(full_page=True)
-            screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="📤 After upload")
+            await page.wait_for_timeout(3000)
 
-            # ---- Step 3: Crop confirm ----
-            await page.wait_for_timeout(2000)
-            crop_btn = None
-            for selector in [
-                'button:has-text("Confirm")', 'button:has-text("Crop")',
-                'button:has-text("Apply")', 'button:has-text("Next")',
-                'div[role="button"]:has-text("Confirm")',
-                'button[class*="crop"]', 'button[class*="confirm"]'
-            ]:
-                try:
-                    element = page.locator(selector).first
-                    if await element.count() > 0:
-                        crop_btn = element
-                        break
-                except:
-                    continue
-            if crop_btn:
-                logger.info("🔄 Clicking crop confirm...")
-                await crop_btn.click(timeout=5000)
-                await page.wait_for_timeout(2000)
-                screenshot = await page.screenshot(full_page=True)
-                screenshot = self._resize_image(screenshot)
-                await update.message.reply_photo(photo=BytesIO(screenshot), caption="✂️ After crop confirm")
-
-            # ---- Step 4: Find and click generate ----
-            logger.info("🔍 Searching for generate button...")
-            generate_btn = None
-            possible_texts = ["Generate", "Undress", "Start", "Generate Image"]
-            for text in possible_texts:
-                buttons = await page.locator(f'button:has-text("{text}")').all()
-                if buttons:
-                    for btn in buttons:
-                        disabled = await btn.get_attribute('disabled')
-                        aria_disabled = await btn.get_attribute('aria-disabled')
-                        class_attr = await btn.get_attribute('class') or ''
-                        box = await btn.bounding_box()
-                        if not disabled and aria_disabled != 'true' and 'disabled' not in class_attr and 'opacity-50' not in class_attr and box and box['width'] > 0 and box['height'] > 0:
-                            generate_btn = btn
-                            logger.info(f"✅ Found enabled button with text '{text}', box: {box}")
-                            break
-                    if generate_btn:
-                        break
-
-            if not generate_btn:
-                generate_btn = page.locator('button:has-text("Generate")').first
-                if await generate_btn.count() == 0:
-                    raise Exception("No generate button found")
-
-            box = await generate_btn.bounding_box()
-            if not box:
-                raise Exception("Cannot get bounding box")
-            x = box['x'] + box['width'] / 2
-            y = box['y'] + box['height'] / 2
-            logger.info(f"📍 Button center: ({x}, {y})")
-
-            await generate_btn.scroll_into_view_if_needed()
-            await page.wait_for_timeout(500)
-            await generate_btn.hover()
-            await page.wait_for_timeout(200)
-            await page.mouse.down()
-            await page.wait_for_timeout(100)
-            await page.mouse.up()
-            await page.wait_for_timeout(500)
-            logger.info("🔄 Generate clicked")
-
-            # ---- Step 5: Wait full 20 minutes ----
-            WAIT_SECONDS = 1200  # 20 minutes
-            CHECK_INTERVAL = 10
-            elapsed = 0
-            limit_detected = False
-            result_found = False
-            error_message = None
-
-            logger.info(f"⏳ Waiting {WAIT_SECONDS//60} minutes for generation (no early sends)...")
-            while elapsed < WAIT_SECONDS:
-                await asyncio.sleep(CHECK_INTERVAL)
-                elapsed += CHECK_INTERVAL
-
-                # Log progress every minute
-                if elapsed % 60 == 0:
-                    logger.info(f"⏱️ {elapsed//60} minutes elapsed, {WAIT_SECONDS - elapsed} seconds remaining")
-
-                # Check for limit (log only, don't break)
-                page_text = await page.content()
-                limit_keywords = ['limit', 'cooldown', 'try again', 'wait', 'minutes', 'hours', 'daily', 'exceeded', 'reached']
-                if any(kw in page_text.lower() for kw in limit_keywords):
-                    if not limit_detected:
-                        logger.warning("🚫 Daily limit or cooldown detected on page")
-                    limit_detected = True
-                    # Don't break, just keep waiting
-
-                # Check for result image (log only)
-                selectors = [
-                    'img[class*="result"]', 'img[class*="output"]',
-                    'img[class*="generated"]', 'img[alt*="result"]',
-                    'img[data-testid*="result"]', 'div.result img',
-                    'div.output img', 'div.generated img',
-                    'img[src^="data:image"]', 'img:not([src*="logo"])'
-                ]
-                for sel in selectors:
-                    try:
-                        imgs = await page.locator(sel).all()
-                        for img in imgs:
-                            box = await img.bounding_box()
-                            if box and box['width'] > 0 and box['height'] > 0:
-                                if not result_found:
-                                    logger.info(f"✅ Result image detected with selector: {sel} at {elapsed}s")
-                                result_found = True
-                                break
-                    except:
-                        continue
-                    if result_found:
-                        break
-
-            # ---- Step 6: Final screenshot after full wait ----
-            screenshot = await page.screenshot(full_page=True)
-            screenshot = self._resize_image(screenshot)
-
-            # Build caption
-            if limit_detected:
-                caption = "⛔ Daily limit or cooldown detected during wait"
-            elif result_found:
-                caption = "✅ Generation complete (result image found)"
+            # ---- Step 3: Consent Popup ----
+            consent_checkbox = page.locator('input[type="checkbox"]').first
+            if await consent_checkbox.count() > 0:
+                logger.info("✅ Consent popup detected, checking checkbox...")
+                await consent_checkbox.click()
+                await page.wait_for_timeout(500)
+                agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
+                if await agree_btn.count() > 0:
+                    logger.info("✅ Clicking Agree & continue...")
+                    await agree_btn.click()
+                    await page.wait_for_timeout(3000)
             else:
-                caption = "⏱️ Timeout – no result image detected after 20 minutes"
+                logger.info("ℹ️ No consent popup detected")
 
+            # ---- Step 4: Wait for upload to complete ----
+            logger.info("⏳ Waiting for upload to complete...")
+            await page.wait_for_timeout(3000)
+
+            # ---- Step 5: Enter prompt ----
+            prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
+            if await prompt_input.count() > 0:
+                logger.info("✏️ Entering prompt: 'Remove clothes'")
+                await prompt_input.fill("Remove clothes")
+                await page.wait_for_timeout(1000)
+            else:
+                logger.warning("⚠️ No prompt input found, continuing anyway")
+
+            # ---- Screenshot 2: After upload and prompt ----
+            screenshot = await page.screenshot(full_page=True)
+            screenshot = self._resize_image(screenshot)
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="📤 Uploaded & prompt entered")
+
+            # ---- Step 6: Click generate ----
+            generate_btn = page.locator('button:has-text("Generate"), div:has-text("Generate"), input[value*="Generate"]').first
+            if await generate_btn.count() == 0:
+                raise Exception("No generate button found")
+            logger.info("🔄 Clicking generate button...")
+            await generate_btn.click()
+            await page.wait_for_timeout(2000)
+
+            # ---- Step 7: Wait for result (up to 60 seconds) with logging ----
+            logger.info("⏳ Waiting for result image... (max 60s)")
+            result_img = None
+            start_time = asyncio.get_event_loop().time()
+            for i in range(60):
+                elapsed = int(asyncio.get_event_loop().time() - start_time)
+                logger.info(f"🔍 Check {i+1}: Looking for result image... (elapsed {elapsed}s)")
+                images = await page.locator('img[src^="data:image"], img[class*="result"], img[class*="output"], img[class*="generated"]').all()
+                logger.info(f"   Found {len(images)} candidate image(s)")
+                for idx, img in enumerate(images):
+                    box = await img.bounding_box()
+                    src = await img.get_attribute('src') or ''
+                    logger.info(f"   Image {idx}: src={src[:50]}..., box={box}")
+                    if box and box['width'] > 0 and box['height'] > 0:
+                        result_img = img
+                        logger.info(f"✅ Result image detected at {elapsed}s (width={box['width']}, height={box['height']})")
+                        break
+                if result_img:
+                    break
+                # Also check for credit/error messages
+                page_text = await page.content()
+                if "credit" in page_text.lower() or "not enough" in page_text.lower():
+                    logger.warning("⚠️ Credit/error message detected: " + page_text[:200])
+                await asyncio.sleep(1)
+
+            # ---- Step 8: Final screenshot ----
+            await page.wait_for_timeout(2000)
+            screenshot = await page.screenshot(full_page=True)
+            screenshot = self._resize_image(screenshot)
+            if result_img:
+                caption = f"✅ Final result (generated at {elapsed}s)"
+            else:
+                # Check if there's an error message on the page
+                page_text = await page.content()
+                if "credit" in page_text.lower() or "not enough" in page_text.lower():
+                    caption = "⚠️ Credit/error detected – result may not be generated"
+                else:
+                    caption = "⏱️ Timeout – no result after 60s"
             await update.message.reply_photo(photo=BytesIO(screenshot), caption=caption)
-
-            # Send a text summary as well
-            summary = f"Status: {caption}\nResult detected: {result_found}\nLimit detected: {limit_detected}"
-            await update.message.reply_text(summary)
+            logger.info(f"===== Process finished. Result found: {result_img is not None} =====")
 
             await browser.close()

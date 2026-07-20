@@ -62,26 +62,32 @@ class TaskExecutor:
             return False
 
     async def _get_credits(self, page):
-        """Extract credit balance."""
-        try:
-            credit_elem = page.locator('img[alt*="coin"], div[class*="credit"], span[class*="credit"], .sf-cost-credits').first
-            await credit_elem.wait_for(state="visible", timeout=5000)
-        except:
-            page_text = await page.content()
-            match = re.search(r'credits?\s*:?\s*(\d+)', page_text, re.I)
-            if match:
-                return int(match.group(1))
+        """Extract credit balance from the coin icon's sibling text."""
+        # Look for the coin icon
+        coin = page.locator('img[alt*="coin"], img[src*="coin"]').first
+        if await coin.count() == 0:
+            logger.warning("No coin icon found")
             return None
-        text = await credit_elem.text_content()
+        # Get the parent element (often a flex container)
+        parent = coin.locator('..')
+        if await parent.count() == 0:
+            logger.warning("No parent for coin icon")
+            return None
+        # Get all text from the parent
+        text = await parent.text_content()
+        logger.info(f"Text near coin icon: {text}")
+        # Extract numbers
         numbers = re.findall(r'\d+', text)
         if numbers:
-            return int(numbers[0])
-        parent = credit_elem.locator('..')
-        if await parent.count() > 0:
-            text = await parent.text_content()
-            numbers = re.findall(r'\d+', text)
-            if numbers:
-                return int(numbers[0])
+            # Usually the first number is the balance
+            balance = int(numbers[0])
+            logger.info(f"Extracted credit balance: {balance}")
+            return balance
+        # Fallback: search whole page
+        page_text = await page.content()
+        match = re.search(r'credits?\s*:?\s*(\d+)', page_text, re.I)
+        if match:
+            return int(match.group(1))
         return None
 
     async def _ensure_credits(self, page):
@@ -129,7 +135,6 @@ class TaskExecutor:
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
 
         async with async_playwright() as p:
-            # Launch with anti-detection args
             browser = await p.chromium.launch(
                 headless=True,
                 args=[
@@ -150,14 +155,12 @@ class TaskExecutor:
             )
             page = await context.new_page()
 
-            # Remove webdriver flag
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             """)
 
-            # Apply playwright-stealth if available
             try:
                 from playwright_stealth import stealth_async
                 await stealth_async(page)

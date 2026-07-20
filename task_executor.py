@@ -116,13 +116,7 @@ class TaskExecutor:
             await page.wait_for_timeout(500)
             logger.info("🔄 Generate clicked")
 
-            # ---- Step 5: Processing screenshot ----
-            await page.wait_for_timeout(2000)
-            screenshot = await page.screenshot(full_page=True)
-            screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
-
-            # ---- Step 6: Wait 20 minutes with diagnostics ----
+            # ---- Step 5: Wait full 20 minutes ----
             WAIT_SECONDS = 1200  # 20 minutes
             CHECK_INTERVAL = 10
             elapsed = 0
@@ -130,27 +124,25 @@ class TaskExecutor:
             result_found = False
             error_message = None
 
-            logger.info(f"⏳ Waiting up to {WAIT_SECONDS//60} minutes for generation...")
+            logger.info(f"⏳ Waiting {WAIT_SECONDS//60} minutes for generation (no early sends)...")
             while elapsed < WAIT_SECONDS:
                 await asyncio.sleep(CHECK_INTERVAL)
                 elapsed += CHECK_INTERVAL
 
-                # Get page content for diagnostics
-                page_text = await page.content()
+                # Log progress every minute
+                if elapsed % 60 == 0:
+                    logger.info(f"⏱️ {elapsed//60} minutes elapsed, {WAIT_SECONDS - elapsed} seconds remaining")
 
-                # Check for limit keywords
+                # Check for limit (log only, don't break)
+                page_text = await page.content()
                 limit_keywords = ['limit', 'cooldown', 'try again', 'wait', 'minutes', 'hours', 'daily', 'exceeded', 'reached']
                 if any(kw in page_text.lower() for kw in limit_keywords):
+                    if not limit_detected:
+                        logger.warning("🚫 Daily limit or cooldown detected on page")
                     limit_detected = True
-                    logger.warning("🚫 Daily limit reached or cooldown detected!")
-                    # Capture error message snippet
-                    for kw in limit_keywords:
-                        if kw in page_text.lower():
-                            error_message = kw
-                            break
-                    break
+                    # Don't break, just keep waiting
 
-                # Check for result image
+                # Check for result image (log only)
                 selectors = [
                     'img[class*="result"]', 'img[class*="output"]',
                     'img[class*="generated"]', 'img[alt*="result"]',
@@ -164,37 +156,31 @@ class TaskExecutor:
                         for img in imgs:
                             box = await img.bounding_box()
                             if box and box['width'] > 0 and box['height'] > 0:
+                                if not result_found:
+                                    logger.info(f"✅ Result image detected with selector: {sel} at {elapsed}s")
                                 result_found = True
-                                logger.info(f"✅ Result image detected with selector: {sel} at {elapsed}s")
                                 break
                     except:
                         continue
                     if result_found:
                         break
-                if result_found:
-                    break
 
-                # Log every minute
-                if elapsed % 60 == 0:
-                    logger.info(f"⏱️ {elapsed//60} minutes elapsed, {WAIT_SECONDS - elapsed} seconds remaining")
-
-            # ---- Step 7: Final screenshot and report ----
+            # ---- Step 6: Final screenshot after full wait ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
 
+            # Build caption
             if limit_detected:
-                caption = f"⛔ Daily limit reached (detected '{error_message}')"
+                caption = "⛔ Daily limit or cooldown detected during wait"
             elif result_found:
-                caption = "✅ Final result (image generated)"
+                caption = "✅ Generation complete (result image found)"
             else:
-                caption = "⚠️ Timeout: No result image detected after 20 minutes"
+                caption = "⏱️ Timeout – no result image detected after 20 minutes"
 
             await update.message.reply_photo(photo=BytesIO(screenshot), caption=caption)
 
-            # Also send a text summary for clarity
-            summary = f"Generation status: {caption}\n" \
-                      f"Result found: {result_found}\n" \
-                      f"Limit detected: {limit_detected}"
+            # Send a text summary as well
+            summary = f"Status: {caption}\nResult detected: {result_found}\nLimit detected: {limit_detected}"
             await update.message.reply_text(summary)
 
             await browser.close()

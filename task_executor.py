@@ -44,51 +44,61 @@ class TaskExecutor:
             return False
 
     async def _refresh_credits_proactively(self, update, page):
-        """Refresh credits by clicking the coin icon (known to work)."""
-        logger.info("🪙 Refreshing credits via coin icon...")
-        coin_btn = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
-        if await coin_btn.count() > 0:
+        """Click coin icon → pricing page → wait → go back."""
+        logger.info("🪙 Looking for coin icon or Credits link...")
+        # Try multiple selectors for coin/credits
+        selectors = [
+            'img[alt*="coin"]',
+            'img[src*="coin"]',
+            'svg[alt*="coin"]',
+            'a:has-text("Credits")',
+            'button:has-text("Credits")',
+            '*[aria-label*="credit"]'
+        ]
+        coin_btn = None
+        for sel in selectors:
+            elem = page.locator(sel).first
+            if await elem.count() > 0:
+                coin_btn = elem
+                logger.info(f"✅ Found coin/credit with selector: {sel}")
+                break
+        if coin_btn:
+            logger.info("🪙 Clicking coin icon to open pricing page...")
             await coin_btn.click()
-            logger.info("⏳ Waiting on pricing page...")
             await page.wait_for_timeout(3000)
-            await self._send_screenshot(update, page, "🪙 Pricing page after coin click")
+            await self._send_screenshot(update, page, "🪙 Pricing / Credits page after coin click")
+            await page.wait_for_timeout(2000)
             logger.info("🔙 Going back to generation page...")
             await page.go_back()
             await page.wait_for_timeout(3000)
-            await self._send_screenshot(update, page, "🔙 Returned after refresh")
+            await self._send_screenshot(update, page, "🔙 Returned to generation page after refresh")
             return True
         else:
-            logger.warning("Coin icon not found; cannot refresh.")
+            logger.warning("⚠️ Coin/credit button not found – skipping refresh.")
             return False
 
     async def _get_credits(self, page):
         """Extract credit balance from the coin icon's parent text."""
-        # Find the coin icon
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
-            # Get the parent (the container with the balance)
             parent = coin.locator('..')
             if await parent.count() > 0:
                 text = await parent.text_content()
                 logger.info(f"Text from coin parent: {text}")
-                # Extract all numbers
                 numbers = re.findall(r'\d+', text)
                 if numbers:
-                    # The first number is likely the balance
                     balance = int(numbers[0])
                     logger.info(f"Detected balance: {balance}")
                     return balance
-        # Fallback: look for "Credits" text and a number near it
         page_text = await page.content()
         match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
         if match:
             balance = int(match.group(1))
-            logger.info(f"Detected balance via 'Credits' text: {balance}")
+            logger.info(f"Detected via 'Credits' text: {balance}")
             return balance
         return None
 
     async def _ensure_credits(self, page, update):
-        """Check credits; if 0, abort."""
         credits = await self._get_credits(page)
         if credits is None:
             logger.warning("Could not read credits. Assuming insufficient, aborting.")
@@ -161,6 +171,10 @@ class TaskExecutor:
             await page.wait_for_timeout(2000)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
+            # ---- Wait 5 seconds before clicking age ----
+            logger.info("⏳ Waiting 5 seconds before interacting with age gate...")
+            await page.wait_for_timeout(5000)
+
             # ---- Step 2: Age Verification ----
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
@@ -171,7 +185,7 @@ class TaskExecutor:
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Step 3: Proactive Credit Refresh ----
+            # ---- Step 3: Proactive Credit Refresh (coin click) ----
             await self._refresh_credits_proactively(update, page)
 
             # ---- Step 4: Upload ----
@@ -227,7 +241,7 @@ class TaskExecutor:
                 await page.wait_for_timeout(1000)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
-            # ---- Step 7: Check credits before generate ----
+            # ---- Step 7: Credit check before generate ----
             logger.info("💰 Checking credits before generate...")
             if not await self._ensure_credits(page, update):
                 logger.error("Insufficient credits, aborting")

@@ -39,11 +39,9 @@ class TaskExecutor:
 
     async def _upload_image(self, page, image_bytes):
         """Upload image by locating the upload area via 'Files supported:' text."""
-        # Try exact text with colon
         text_selectors = [
             'text="Files supported:"',
             'text="Files supported"',
-            'text="supported"',
             'div:has-text("Files supported:")',
             'div:has-text("Files supported")'
         ]
@@ -53,8 +51,6 @@ class TaskExecutor:
                 element = page.locator(sel).first
                 if await element.count() > 0:
                     logger.info(f"✅ Found text with selector: {sel}")
-                    # Get the parent div (the upload area)
-                    # Sometimes the text is inside a p or span, we need the clickable container
                     parent = element.locator('xpath=ancestor::div[1]')
                     if await parent.count() > 0:
                         upload_area = parent
@@ -65,13 +61,11 @@ class TaskExecutor:
                 continue
 
         if not upload_area or await upload_area.count() == 0:
-            # Fallback: try to find any div with upload-related class
             upload_area = page.locator('div[class*="drop"], div[class*="upload"], div[class*="drag"]').first
             if await upload_area.count() == 0:
                 raise Exception("Could not find upload area")
 
         logger.info("✅ Upload area located, attempting upload...")
-        # Try file chooser interception
         try:
             async with page.expect_file_chooser(timeout=10000) as fc_info:
                 await upload_area.click()
@@ -82,14 +76,12 @@ class TaskExecutor:
         except Exception as e:
             logger.warning(f"File chooser failed: {e}, falling back to direct input")
 
-        # Fallback: direct file input
         file_input = page.locator('input[type="file"]').first
         if await file_input.count() > 0:
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
             logger.info("📤 Image uploaded via direct file input")
             return
 
-        # Last resort: create custom input
         logger.info("Creating custom file input via JavaScript")
         await page.evaluate("""
             () => {
@@ -155,25 +147,36 @@ class TaskExecutor:
             # ---- Step 2: Upload ----
             logger.info("📤 Uploading image...")
             await self._upload_image(page, image_bytes)
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(5000)  # wait for upload to settle
+
+            # ---- Debug screenshot after upload ----
+            screenshot = await page.screenshot(full_page=True)
+            screenshot = self._resize_image(screenshot)
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After upload (debug)")
 
             # ---- Step 3: Consent Popup ----
-            consent_checkbox = page.locator('input[type="checkbox"]').first
-            if await consent_checkbox.count() > 0:
-                logger.info("✅ Consent popup detected, checking checkbox...")
-                await consent_checkbox.click()
-                await page.wait_for_timeout(500)
-                agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
-                if await agree_btn.count() > 0:
-                    logger.info("✅ Clicking Agree & continue via coordinates...")
-                    await self._click_element_center(page, agree_btn, "Agree & continue button")
-                    await page.wait_for_timeout(3000)
-            else:
-                logger.info("ℹ️ No consent popup detected")
+            try:
+                # Wait for checkbox to be visible (consent popup)
+                consent_checkbox = page.locator('input[type="checkbox"]').first
+                await consent_checkbox.wait_for(state="visible", timeout=10000)
+                if await consent_checkbox.count() > 0:
+                    logger.info("✅ Consent popup detected, checking checkbox...")
+                    await consent_checkbox.click()
+                    await page.wait_for_timeout(500)
+                    agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
+                    if await agree_btn.count() > 0:
+                        logger.info("✅ Clicking Agree & continue via coordinates...")
+                        await self._click_element_center(page, agree_btn, "Agree & continue button")
+                        await page.wait_for_timeout(3000)
+                else:
+                    logger.info("ℹ️ No consent popup detected")
+            except Exception as e:
+                logger.warning(f"Consent popup handling failed: {e}")
+                # If no checkbox, maybe it's already accepted
 
             # ---- Step 4: Wait for upload to complete ----
             logger.info("⏳ Waiting for upload to complete...")
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(5000)
 
             # ---- Step 5: Enter prompt ----
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first

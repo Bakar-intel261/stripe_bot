@@ -89,45 +89,36 @@ class TaskExecutor:
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            await page.wait_for_timeout(3000)
+            # Wait a short moment for the popup to appear
+            logger.info("⏳ Waiting 2 seconds for consent popup...")
+            await page.wait_for_timeout(2000)
 
-            # ---- Debug screenshot after upload ----
+            # ---- Step 3: Handle consent popup using JavaScript ----
+            logger.info("🔍 Handling consent popup via JavaScript...")
+            await page.evaluate("""
+                () => {
+                    // Find and click the checkbox
+                    const checkbox = document.querySelector('input[type="checkbox"]');
+                    if (checkbox) {
+                        checkbox.click();
+                    }
+                    // Find and click the Agree & continue button
+                    const buttons = document.querySelectorAll('button');
+                    for (let btn of buttons) {
+                        if (btn.textContent && btn.textContent.includes('Agree & continue')) {
+                            btn.click();
+                            break;
+                        }
+                    }
+                }
+            """)
+            logger.info("✅ Consent popup actions executed via JavaScript")
+            await page.wait_for_timeout(1000)
+
+            # ---- Debug screenshot after consent ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After upload (debug)")
-
-            # ---- Step 3: Handle consent popup ----
-            logger.info("🔍 Waiting for consent popup...")
-            try:
-                # Wait for the consent popup card to appear (class mi-upload-consent__card)
-                consent_card = page.locator('div.mi-upload-consent__card').first
-                await consent_card.wait_for(state="visible", timeout=15000)
-                logger.info("✅ Consent popup detected")
-
-                # Find the checkbox inside the popup
-                checkbox = page.locator('input[type="checkbox"]').first
-                if await checkbox.count() > 0:
-                    logger.info("✅ Checkbox found, clicking via coordinates...")
-                    await self._click_element_center(page, checkbox, "Consent checkbox")
-                    await page.wait_for_timeout(500)
-                else:
-                    logger.warning("⚠️ Checkbox not found")
-
-                # Find and click "Agree & continue" button
-                agree_btn = page.locator('button:has-text("Agree & continue")').first
-                if await agree_btn.count() > 0:
-                    logger.info("✅ Agree & continue button found, clicking via coordinates...")
-                    await self._click_element_center(page, agree_btn, "Agree & continue button")
-                    await page.wait_for_timeout(3000)
-                else:
-                    logger.warning("⚠️ Agree & continue button not found")
-
-                # Debug screenshot after consent
-                screenshot = await page.screenshot(full_page=True)
-                screenshot = self._resize_image(screenshot)
-                await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent popup handled")
-            except Exception as e:
-                logger.warning(f"Consent popup handling failed: {e}")
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent (debug)")
 
             # ---- Step 4: Enter prompt ----
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first

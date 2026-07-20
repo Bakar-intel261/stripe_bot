@@ -22,7 +22,6 @@ class TaskExecutor:
         return image_bytes
 
     async def _click_element_center(self, page, locator, description="element"):
-        """Find element, get bounding box, click at center coordinates."""
         try:
             box = await locator.bounding_box()
             if not box:
@@ -56,14 +55,20 @@ class TaskExecutor:
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
-            # Find age verification button and click via coordinates
-            age_btn = page.locator('button:has-text("I Am 18"), div:has-text("I Am 18"), a:has-text("I Am 18")').first
+            age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
                 await self._click_element_center(page, age_btn, "Age verification button")
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
             else:
-                logger.info("ℹ️ No age verification needed")
+                # Fallback
+                age_btn = page.locator('button:has-text("I Am 18")').first
+                if await age_btn.count() > 0:
+                    logger.info("✅ Found age button with 'I Am 18', clicking...")
+                    await self._click_element_center(page, age_btn, "Age verification button (fallback)")
+                    await page.wait_for_timeout(3000)
+                else:
+                    logger.info("ℹ️ No age verification needed")
 
             # ---- Screenshot 1: Landing ----
             screenshot = await page.screenshot(full_page=True)
@@ -72,58 +77,16 @@ class TaskExecutor:
 
             # ---- Step 2: Upload ----
             logger.info("🔍 Searching for file input...")
-            # Try multiple selectors for file input
-            file_input_selectors = [
-                'input[type="file"]',
-                'input[type="file"][accept*="image"]',
-                'div[class*="upload"] input[type="file"]',
-                'div[class*="dropzone"] input[type="file"]',
-                'button:has-text("Upload") ~ input[type="file"]'
-            ]
-            file_input = None
-            for sel in file_input_selectors:
-                try:
-                    element = page.locator(sel).first
-                    if await element.count() > 0:
-                        file_input = element
-                        logger.info(f"✅ Found file input with selector: {sel}")
-                        break
-                except:
-                    continue
-            if not file_input:
-                # If still not found, try to click a button that triggers file input
-                upload_btn = page.locator('button:has-text("Upload"), div:has-text("Upload"), button:has-text("Choose File")').first
-                if await upload_btn.count() > 0:
-                    logger.info("✅ Found upload button, clicking to open file dialog...")
-                    await upload_btn.click()
-                    # Now the file input should appear (or be visible)
-                    await page.wait_for_timeout(1000)
-                    file_input = page.locator('input[type="file"]').first
-            if not file_input or await file_input.count() == 0:
-                # Last resort: use JavaScript to find hidden file input
-                logger.info("⚠️ Trying JavaScript to find file input...")
-                js_input = await page.evaluate("""
-                    () => {
-                        const inputs = document.querySelectorAll('input[type="file"]');
-                        for (let inp of inputs) {
-                            if (inp.offsetParent !== null || inp.style.display !== 'none') {
-                                return inp;
-                            }
-                        }
-                        return null;
-                    }
-                """)
-                if js_input:
-                    # We can't directly use JavaScript element, but we can use it as a selector
-                    # We'll use the first visible input[type=file] again
-                    file_input = page.locator('input[type="file"]').first
-                    logger.info("✅ Found visible file input via JS")
-
-            if not file_input or await file_input.count() == 0:
-                raise Exception("No file input found after all attempts")
-
-            logger.info("📤 Uploading image...")
+            # Directly find file input element
+            file_input = page.locator('input[type="file"]').first
+            if await file_input.count() == 0:
+                # Try with accept attribute
+                file_input = page.locator('input[accept*="image"]').first
+                if await file_input.count() == 0:
+                    raise Exception("No file input found")
+            logger.info("✅ Found file input element")
             await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+            logger.info("📤 Image uploaded")
             await page.wait_for_timeout(3000)
 
             # ---- Step 3: Consent Popup ----

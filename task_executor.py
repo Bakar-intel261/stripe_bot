@@ -96,24 +96,24 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After upload (debug)")
 
-            # ---- Step 3: Handle consent popup ----
+            # ---- Step 3: Handle consent popup using coordinates ----
             logger.info("🔍 Checking for consent popup...")
             try:
-                # Wait for checkbox to appear (up to 15 seconds)
+                # Wait for the checkbox to appear
                 checkbox = page.locator('input[type="checkbox"]').first
                 await checkbox.wait_for(state="visible", timeout=15000)
                 if await checkbox.count() > 0:
-                    logger.info("✅ Consent popup detected, checking checkbox...")
-                    # Click the checkbox using its label or the checkbox itself
-                    await checkbox.click()
+                    logger.info("✅ Consent popup detected, checking checkbox via coordinates...")
+                    await self._click_element_center(page, checkbox, "Consent checkbox")
                     await page.wait_for_timeout(500)
-                    # Find and click "Agree & continue"
+                    
+                    # Click "Agree & continue" via coordinates
                     agree_btn = page.locator('button:has-text("Agree & continue"), div:has-text("Agree & continue")').first
                     if await agree_btn.count() > 0:
-                        logger.info("✅ Clicking Agree & continue...")
+                        logger.info("✅ Clicking Agree & continue via coordinates...")
                         await self._click_element_center(page, agree_btn, "Agree & continue button")
                         await page.wait_for_timeout(3000)
-                        # Take a debug screenshot after consent
+                        # Debug screenshot after consent
                         screenshot = await page.screenshot(full_page=True)
                         screenshot = self._resize_image(screenshot)
                         await update.message.reply_photo(photo=BytesIO(screenshot), caption="📸 After consent popup handled")

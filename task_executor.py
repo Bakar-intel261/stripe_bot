@@ -2,6 +2,7 @@ import logging
 import base64
 import asyncio
 import re
+import random
 from playwright.async_api import async_playwright
 from chrome_fingerprints import FingerprintGenerator
 from io import BytesIO
@@ -43,65 +44,86 @@ class TaskExecutor:
             logger.error(f"❌ Error clicking {description}: {e}")
             return False
 
+    async def _human_wait(self, min_sec=5, max_sec=10):
+        delay = random.randint(min_sec, max_sec)
+        logger.info(f"⏳ Waiting {delay} seconds...")
+        await asyncio.sleep(delay)
+
     async def _refresh_credits_proactively(self, update, page):
-        """Click coin icon → pricing page → wait → go back."""
-        logger.info("🪙 Looking for coin icon or Credits link...")
-        # Try multiple selectors for coin/credits
+        """Click Credits link → pricing → back (with human delay)."""
+        logger.info("🪙 Looking for Credits link...")
+        credit_link = page.locator('a:has-text("Credits")').first
+        if await credit_link.count() == 0:
+            credit_link = page.locator('button:has-text("Credits")').first
+        if await credit_link.count() == 0:
+            logger.warning("⚠️ Credits link not found")
+            return False
+
+        logger.info("🪙 Clicking Credits link...")
+        await credit_link.click()
+        await self._human_wait(3, 5)
+        await self._send_screenshot(update, page, "🪙 Credits page")
+        await self._human_wait(2, 4)
+        logger.info("🔙 Going back...")
+        await page.go_back()
+        await self._human_wait(3, 6)
+        await self._send_screenshot(update, page, "🔙 Back after refresh")
+        return True
+
+    async def _get_credits(self, page):
+        """Robust credit balance detection with multiple selectors and retry."""
+        # Wait for page to settle
+        await asyncio.sleep(2)
+
+        # Try multiple selectors
         selectors = [
-            'img[alt*="coin"]',
-            'img[src*="coin"]',
-            'svg[alt*="coin"]',
+            'div[class*="credit"] span',
+            'span[class*="credit"]',
+            '.sf-cost-credits',
+            '[class*="balance"]',
+            'img[alt*="coin"] + span',
+            'img[src*="coin"] + span',
             'a:has-text("Credits")',
-            'button:has-text("Credits")',
-            '*[aria-label*="credit"]'
+            'button:has-text("Credits")'
         ]
-        coin_btn = None
         for sel in selectors:
             elem = page.locator(sel).first
             if await elem.count() > 0:
-                coin_btn = elem
-                logger.info(f"✅ Found coin/credit with selector: {sel}")
-                break
-        if coin_btn:
-            logger.info("🪙 Clicking coin icon to open pricing page...")
-            await coin_btn.click()
-            await page.wait_for_timeout(3000)
-            await self._send_screenshot(update, page, "🪙 Pricing / Credits page after coin click")
-            await page.wait_for_timeout(2000)
-            logger.info("🔙 Going back to generation page...")
-            await page.go_back()
-            await page.wait_for_timeout(3000)
-            await self._send_screenshot(update, page, "🔙 Returned to generation page after refresh")
-            return True
-        else:
-            logger.warning("⚠️ Coin/credit button not found – skipping refresh.")
-            return False
+                text = await elem.text_content()
+                if text:
+                    numbers = re.findall(r'\d+', text)
+                    if numbers:
+                        balance = int(numbers[0])
+                        logger.info(f"Balance found with selector {sel}: {balance}")
+                        return balance
 
-    async def _get_credits(self, page):
-        """Extract credit balance from the coin icon's parent text."""
+        # Search page text for "Credits X" pattern
+        page_text = await page.content()
+        match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
+        if match:
+            balance = int(match.group(1))
+            logger.info(f"Balance found via page text: {balance}")
+            return balance
+
+        # Last resort: look for a number near a coin icon
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
             parent = coin.locator('..')
             if await parent.count() > 0:
                 text = await parent.text_content()
-                logger.info(f"Text from coin parent: {text}")
                 numbers = re.findall(r'\d+', text)
                 if numbers:
                     balance = int(numbers[0])
-                    logger.info(f"Detected balance: {balance}")
+                    logger.info(f"Balance from coin parent: {balance}")
                     return balance
-        page_text = await page.content()
-        match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
-        if match:
-            balance = int(match.group(1))
-            logger.info(f"Detected via 'Credits' text: {balance}")
-            return balance
+
+        logger.warning("Could not find credit balance")
         return None
 
     async def _ensure_credits(self, page, update):
         credits = await self._get_credits(page)
         if credits is None:
-            logger.warning("Could not read credits. Assuming insufficient, aborting.")
+            logger.warning("Could not read credits. Aborting.")
             return False
         if credits >= 10:
             logger.info(f"✅ Sufficient credits: {credits}")
@@ -114,19 +136,8 @@ class TaskExecutor:
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        # Safely get screen dimensions
-        if hasattr(fp, 'screen_resolution'):
-            width = getattr(fp.screen_resolution, 'width', 1920)
-            height = getattr(fp.screen_resolution, 'height', 1080)
-        elif hasattr(fp, 'screen'):
-            if isinstance(fp.screen, dict):
-                width = fp.screen.get('width', 1920)
-                height = fp.screen.get('height', 1080)
-            else:
-                width = getattr(fp.screen, 'width', 1920)
-                height = getattr(fp.screen, 'height', 1080)
-        else:
-            width, height = 1920, 1080
+        # Desktop viewport to ensure credit display
+        width, height = 1920, 1080
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
 
         async with async_playwright() as p:
@@ -161,31 +172,27 @@ class TaskExecutor:
                 await stealth_async(page)
                 logger.info("✅ Stealth applied")
             except ImportError:
-                logger.warning("⚠️ playwright-stealth not installed, continuing without")
+                logger.warning("⚠️ playwright-stealth not installed")
 
             logger.info("===== Starting process =====")
 
             # ---- Step 1: Landing ----
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
-            await page.wait_for_timeout(2000)
+            await self._human_wait(3, 6)
             await self._send_screenshot(update, page, "🌐 Landing page")
-
-            # ---- Wait 5 seconds before clicking age ----
-            logger.info("⏳ Waiting 5 seconds before interacting with age gate...")
-            await page.wait_for_timeout(5000)
 
             # ---- Step 2: Age Verification ----
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
                 await self._click_element_center(page, age_btn, "Age verification button")
-                await page.wait_for_timeout(3000)
+                await self._human_wait(3, 5)
                 await self._send_screenshot(update, page, "✅ Age verification accepted")
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Step 3: Proactive Credit Refresh (coin click) ----
+            # ---- Step 3: Proactive Credit Refresh ----
             await self._refresh_credits_proactively(update, page)
 
             # ---- Step 4: Upload ----
@@ -209,7 +216,7 @@ class TaskExecutor:
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            await page.wait_for_timeout(2000)
+            await self._human_wait(2, 4)
             await self._send_screenshot(update, page, "📤 After upload")
 
             # ---- Step 5: Consent popup ----
@@ -226,11 +233,11 @@ class TaskExecutor:
                 consent_block = consent_card.locator('div.mi-upload-consent__consent').first
                 if await consent_block.count() > 0:
                     await self._click_element_center(page, consent_block, "Consent block")
-                    await page.wait_for_timeout(500)
+                    await self._human_wait(1, 2)
                 agree_btn = consent_card.locator('button:has-text("Agree & continue")').first
                 if await agree_btn.count() > 0:
                     await self._click_element_center(page, agree_btn, "Agree & continue button")
-                    await page.wait_for_timeout(3000)
+                    await self._human_wait(3, 5)
                 await self._send_screenshot(update, page, "✅ Consent popup dismissed")
 
             # ---- Step 6: Enter prompt ----
@@ -238,7 +245,7 @@ class TaskExecutor:
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
                 await prompt_input.fill("Remove clothes")
-                await page.wait_for_timeout(1000)
+                await self._human_wait(1, 2)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
             # ---- Step 7: Credit check before generate ----
@@ -261,7 +268,7 @@ class TaskExecutor:
                 await browser.close()
                 return
             await self._click_element_center(page, generate_btn, "Generate button")
-            await page.wait_for_timeout(2000)
+            await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
             # ---- Step 9: Wait for result ----
@@ -281,7 +288,7 @@ class TaskExecutor:
                 await asyncio.sleep(1)
 
             # ---- Step 10: Final ----
-            await page.wait_for_timeout(2000)
+            await self._human_wait(2, 4)
             if result_img:
                 caption = f"✅ Final result (generated at {elapsed}s)"
             else:

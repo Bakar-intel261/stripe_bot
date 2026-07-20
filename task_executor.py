@@ -122,19 +122,79 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🔄 Processing...")
 
-            # ---- Step 6: Wait full 8 minutes (480 seconds) ----
-            logger.info("⏳ Waiting 8 minutes for generation to complete...")
-            WAIT_SECONDS = 480  # 8 minutes
-            for i in range(WAIT_SECONDS):
-                # Optionally log progress every 30 seconds
-                if i % 30 == 0:
-                    logger.info(f"⏱️ {i}s elapsed, {WAIT_SECONDS - i}s remaining")
-                await asyncio.sleep(1)
+            # ---- Step 6: Wait 20 minutes with diagnostics ----
+            WAIT_SECONDS = 1200  # 20 minutes
+            CHECK_INTERVAL = 10
+            elapsed = 0
+            limit_detected = False
+            result_found = False
+            error_message = None
 
-            logger.info("⏰ 8 minutes elapsed. Taking final screenshot.")
-            # ---- Step 7: Final screenshot ----
+            logger.info(f"⏳ Waiting up to {WAIT_SECONDS//60} minutes for generation...")
+            while elapsed < WAIT_SECONDS:
+                await asyncio.sleep(CHECK_INTERVAL)
+                elapsed += CHECK_INTERVAL
+
+                # Get page content for diagnostics
+                page_text = await page.content()
+
+                # Check for limit keywords
+                limit_keywords = ['limit', 'cooldown', 'try again', 'wait', 'minutes', 'hours', 'daily', 'exceeded', 'reached']
+                if any(kw in page_text.lower() for kw in limit_keywords):
+                    limit_detected = True
+                    logger.warning("🚫 Daily limit reached or cooldown detected!")
+                    # Capture error message snippet
+                    for kw in limit_keywords:
+                        if kw in page_text.lower():
+                            error_message = kw
+                            break
+                    break
+
+                # Check for result image
+                selectors = [
+                    'img[class*="result"]', 'img[class*="output"]',
+                    'img[class*="generated"]', 'img[alt*="result"]',
+                    'img[data-testid*="result"]', 'div.result img',
+                    'div.output img', 'div.generated img',
+                    'img[src^="data:image"]', 'img:not([src*="logo"])'
+                ]
+                for sel in selectors:
+                    try:
+                        imgs = await page.locator(sel).all()
+                        for img in imgs:
+                            box = await img.bounding_box()
+                            if box and box['width'] > 0 and box['height'] > 0:
+                                result_found = True
+                                logger.info(f"✅ Result image detected with selector: {sel} at {elapsed}s")
+                                break
+                    except:
+                        continue
+                    if result_found:
+                        break
+                if result_found:
+                    break
+
+                # Log every minute
+                if elapsed % 60 == 0:
+                    logger.info(f"⏱️ {elapsed//60} minutes elapsed, {WAIT_SECONDS - elapsed} seconds remaining")
+
+            # ---- Step 7: Final screenshot and report ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
-            await update.message.reply_photo(photo=BytesIO(screenshot), caption="✅ Final result (after 8 minutes)")
+
+            if limit_detected:
+                caption = f"⛔ Daily limit reached (detected '{error_message}')"
+            elif result_found:
+                caption = "✅ Final result (image generated)"
+            else:
+                caption = "⚠️ Timeout: No result image detected after 20 minutes"
+
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption=caption)
+
+            # Also send a text summary for clarity
+            summary = f"Generation status: {caption}\n" \
+                      f"Result found: {result_found}\n" \
+                      f"Limit detected: {limit_detected}"
+            await update.message.reply_text(summary)
 
             await browser.close()

@@ -55,6 +55,12 @@ class TaskExecutor:
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
+            # Take screenshot 1 second after load
+            await page.wait_for_timeout(1000)
+            screenshot = await page.screenshot(full_page=True)
+            screenshot = self._resize_image(screenshot)
+            await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 1s after load (debug)")
+
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
@@ -63,7 +69,7 @@ class TaskExecutor:
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Screenshot 1: Landing ----
+            # ---- Screenshot 1: Landing (age accepted) ----
             screenshot = await page.screenshot(full_page=True)
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
@@ -89,31 +95,62 @@ class TaskExecutor:
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            # Wait a short moment for the popup to appear
+            # Wait for consent popup
             logger.info("⏳ Waiting 2 seconds for consent popup...")
             await page.wait_for_timeout(2000)
 
-            # ---- Step 3: Handle consent popup using JavaScript ----
-            logger.info("🔍 Handling consent popup via JavaScript...")
-            await page.evaluate("""
-                () => {
-                    // Find and click the checkbox
-                    const checkbox = document.querySelector('input[type="checkbox"]');
-                    if (checkbox) {
-                        checkbox.click();
-                    }
-                    // Find and click the Agree & continue button
-                    const buttons = document.querySelectorAll('button');
-                    for (let btn of buttons) {
-                        if (btn.textContent && btn.textContent.includes('Agree & continue')) {
-                            btn.click();
-                            break;
+            # ---- Step 3: Handle consent popup with multiple methods ----
+            consent_handled = False
+            logger.info("🔍 Handling consent popup...")
+            try:
+                # Method 1: Wait for checkbox and click with JS
+                checkbox = page.locator('input[type="checkbox"]').first
+                if await checkbox.count() > 0:
+                    logger.info("✅ Checkbox found, clicking via JS...")
+                    await checkbox.check()  # Playwright's built-in check
+                    await page.wait_for_timeout(500)
+                    consent_handled = True
+                else:
+                    logger.warning("⚠️ Checkbox not found with locator")
+
+                # Find and click Agree & continue button
+                agree_btn = page.locator('button:has-text("Agree & continue")').first
+                if await agree_btn.count() > 0:
+                    logger.info("✅ Agree button found, clicking via coordinates...")
+                    await self._click_element_center(page, agree_btn, "Agree & continue button")
+                    await page.wait_for_timeout(2000)
+                    consent_handled = True
+                else:
+                    logger.warning("⚠️ Agree button not found with locator")
+            except Exception as e:
+                logger.warning(f"First consent method failed: {e}")
+
+            if not consent_handled:
+                # Method 2: Use JavaScript to click all possible elements
+                logger.info("🛠️ Trying JavaScript fallback for consent popup...")
+                result = await page.evaluate("""
+                    () => {
+                        let clicked = false;
+                        // Click checkbox
+                        const cb = document.querySelector('input[type="checkbox"]');
+                        if (cb) { cb.click(); clicked = true; }
+                        // Click Agree button
+                        const btns = document.querySelectorAll('button');
+                        for (let b of btns) {
+                            if (b.textContent && b.textContent.includes('Agree')) {
+                                b.click();
+                                clicked = true;
+                                break;
+                            }
                         }
+                        return clicked;
                     }
-                }
-            """)
-            logger.info("✅ Consent popup actions executed via JavaScript")
-            await page.wait_for_timeout(1000)
+                """)
+                if result:
+                    logger.info("✅ Consent handled via JS fallback")
+                    await page.wait_for_timeout(2000)
+                else:
+                    logger.warning("⚠️ Consent not handled – may not be needed")
 
             # ---- Debug screenshot after consent ----
             screenshot = await page.screenshot(full_page=True)

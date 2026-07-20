@@ -113,8 +113,20 @@ class TaskExecutor:
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        width = getattr(fp.screen_resolution, 'width', 1920)
-        height = getattr(fp.screen_resolution, 'height', 1080)
+        # Safely get screen dimensions
+        if hasattr(fp, 'screen_resolution'):
+            width = getattr(fp.screen_resolution, 'width', 1920)
+            height = getattr(fp.screen_resolution, 'height', 1080)
+        elif hasattr(fp, 'screen'):
+            if isinstance(fp.screen, dict):
+                width = fp.screen.get('width', 1920)
+                height = fp.screen.get('height', 1080)
+            else:
+                width = getattr(fp.screen, 'width', 1920)
+                height = getattr(fp.screen, 'height', 1080)
+        else:
+            width, height = 1920, 1080
+        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
 
         async with async_playwright() as p:
             # Launch with anti-detection args
@@ -134,7 +146,6 @@ class TaskExecutor:
                 viewport={"width": width, "height": height},
                 locale=getattr(fp, 'locale', 'en-US'),
                 timezone_id=getattr(fp, 'timezone', 'America/New_York'),
-                # Reduce detection
                 device_scale_factor=1
             )
             page = await context.new_page()
@@ -273,7 +284,6 @@ class TaskExecutor:
             if result_img:
                 caption = f"✅ Final result (generated at {elapsed}s)"
             else:
-                # Check page for error
                 page_text = await page.content()
                 if "credit" in page_text.lower() or "not enough" in page_text.lower():
                     caption = "⚠️ Credit/error detected – result may not be generated"

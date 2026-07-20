@@ -62,19 +62,25 @@ class TaskExecutor:
         return True
 
     async def _get_credits(self, page):
-        """Extract the actual credit balance."""
-        # Find coin icon and its parent
-        coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
-        if await coin.count() > 0:
-            parent = coin.locator('..')
-            if await parent.count() > 0:
-                text = await parent.text_content()
-                logger.info(f"Text from coin parent: {text}")
-                numbers = re.findall(r'\d+', text)
-                if numbers:
-                    balance = int(numbers[0])
-                    logger.info(f"Balance from coin parent: {balance}")
-                    return balance
+        """Extract the actual credit balance after waiting for it to load."""
+        # Wait for the coin icon to be visible (up to 10 seconds)
+        try:
+            coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
+            await coin.wait_for(state="visible", timeout=10000)
+        except:
+            logger.warning("Coin icon not visible after 10s")
+            return None
+
+        # Now get the parent text
+        parent = coin.locator('..')
+        if await parent.count() > 0:
+            text = await parent.text_content()
+            logger.info(f"Text from coin parent: {text}")
+            numbers = re.findall(r'\d+', text)
+            if numbers:
+                balance = int(numbers[0])
+                logger.info(f"Balance from coin parent: {balance}")
+                return balance
 
         # Fallback: search for "Credits" followed by a number
         page_text = await page.content()
@@ -84,35 +90,49 @@ class TaskExecutor:
             logger.info(f"Balance from page text: {balance}")
             return balance
 
-        logger.warning("Could not find credit balance")
         return None
 
     async def _ensure_credits(self, page, update):
-        """Check credits; if 0, refresh via homepage and re-check."""
-        credits = await self._get_credits(page)
-        if credits is None:
-            logger.warning("Could not read credits. Assuming 0.")
-            return False
-        if credits >= 10:
-            logger.info(f"✅ Sufficient credits: {credits}")
-            return True
-
-        logger.warning(f"⚠️ Insufficient credits: {credits}. Attempting refresh via homepage...")
-        await self._refresh_credits_proactively(update, page)
-        credits = await self._get_credits(page)
-        if credits is not None and credits >= 10:
-            logger.info(f"✅ Credits refreshed to {credits}")
-            return True
-        else:
-            logger.warning(f"Still insufficient: {credits}. Aborting.")
-            return False
+        """Check credits; if 0, refresh via homepage and re-check up to 2 times."""
+        for attempt in range(2):
+            credits = await self._get_credits(page)
+            if credits is None:
+                logger.warning("Could not read credits. Assuming 0.")
+                return False
+            if credits >= 10:
+                logger.info(f"✅ Sufficient credits: {credits}")
+                return True
+            logger.warning(f"⚠️ Insufficient credits: {credits} (attempt {attempt+1}/2). Refreshing...")
+            await self._refresh_credits_proactively(update, page)
+            # Wait extra to let credits load
+            await self._human_wait(8, 12)
+        logger.error("No free credits after two refresh attempts. Aborting.")
+        return False
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
+        # Full fingerprint application
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        width, height = 1920, 1080
-        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
+        # Get screen resolution
+        if hasattr(fp, 'screen_resolution'):
+            width = getattr(fp.screen_resolution, 'width', 1920)
+            height = getattr(fp.screen_resolution, 'height', 1080)
+        elif hasattr(fp, 'screen'):
+            if isinstance(fp.screen, dict):
+                width = fp.screen.get('width', 1920)
+                height = fp.screen.get('height', 1080)
+            else:
+                width = getattr(fp.screen, 'width', 1920)
+                height = getattr(fp.screen, 'height', 1080)
+        else:
+            width, height = 1920, 1080
+
+        locale = getattr(fp, 'locale', 'en-US')
+        timezone = getattr(fp, 'timezone', 'America/New_York')
+        device_scale = getattr(fp, 'device_scale_factor', 1)
+
+        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -126,19 +146,41 @@ class TaskExecutor:
                     "--disable-dev-shm-usage"
                 ]
             )
+            # Create a context with full fingerprint and realistic settings
             context = await browser.new_context(
                 user_agent=ua,
                 viewport={"width": width, "height": height},
-                locale=getattr(fp, 'locale', 'en-US'),
-                timezone_id=getattr(fp, 'timezone', 'America/New_York'),
-                device_scale_factor=1
+                locale=locale,
+                timezone_id=timezone,
+                device_scale_factor=device_scale,
+                color_scheme='light',  # or random
+                extra_http_headers={
+                    'Accept-Language': f"{locale},en;q=0.9",
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Cache-Control': 'max-age=0',
+                },
+                java_script_enabled=True,
+                bypass_csp=True,
             )
             page = await context.new_page()
 
+            # Remove webdriver and add other stealth properties
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                Object.defineProperty(window, 'chrome', { value: { runtime: {} } });
+                Object.defineProperty(navigator, 'platform', { value: 'Win32' });
+                // Add more to mimic real browser
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
             """)
 
             try:
@@ -153,7 +195,7 @@ class TaskExecutor:
             # ---- Step 1: Landing ----
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
-            await self._human_wait(3, 6)
+            await self._human_wait(5, 8)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
             # ---- Step 2: Age Verification ----
@@ -167,7 +209,7 @@ class TaskExecutor:
                 logger.info("ℹ️ No age verification needed")
 
             # ---- Step 3: Check credits immediately after age gate ----
-            logger.info("💰 Checking credits...")
+            logger.info("💰 Checking credits after age gate...")
             if not await self._ensure_credits(page, update):
                 logger.error("No free credits after refresh, aborting")
                 await self._send_screenshot(update, page, "⛔ No free credits available")

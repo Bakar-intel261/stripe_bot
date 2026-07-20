@@ -37,6 +37,71 @@ class TaskExecutor:
             logger.error(f"❌ Error clicking {description}: {e}")
             return False
 
+    async def _upload_image(self, page, image_bytes):
+        """Upload image by locating the upload area via 'Files supported' text."""
+        # Find the element containing "Files supported"
+        text_element = page.locator('text="Files supported"').first
+        if await text_element.count() == 0:
+            # Fallback: partial match
+            text_element = page.locator('text="Files supported"').first
+            if await text_element.count() == 0:
+                text_element = page.locator('text="supported"').first
+        if await text_element.count() == 0:
+            raise Exception("Could not find 'Files supported' text")
+
+        # The upload area is the parent (or grandparent) of this text
+        # We'll click the closest div parent
+        upload_area = page.locator('div:has-text("Files supported")').first
+        if await upload_area.count() == 0:
+            upload_area = page.locator('div:has-text("supported")').first
+        if await upload_area.count() == 0:
+            raise Exception("No upload area found")
+
+        logger.info("✅ Found upload area using 'Files supported' text")
+        # Try file chooser first
+        try:
+            async with page.expect_file_chooser(timeout=10000) as fc_info:
+                await upload_area.click()
+            file_chooser = await fc_info.value
+            await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+            logger.info("📤 Image uploaded via file chooser")
+            return
+        except Exception as e:
+            logger.warning(f"File chooser failed: {e}, falling back to direct input")
+
+        # Fallback: find file input
+        file_input = page.locator('input[type="file"]').first
+        if await file_input.count() > 0:
+            await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+            logger.info("📤 Image uploaded via direct file input")
+            return
+
+        # Last resort: create custom input
+        logger.info("Creating custom file input")
+        await page.evaluate("""
+            () => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'image/*';
+                input.id = 'custom_file_input';
+                input.style.position = 'absolute';
+                input.style.opacity = '0';
+                input.style.width = '100%';
+                input.style.height = '100%';
+                input.style.cursor = 'pointer';
+                const area = document.querySelector('div:has-text("Files supported")');
+                if (area) area.appendChild(input);
+                else document.body.appendChild(input);
+            }
+        """)
+        custom_input = page.locator('#custom_file_input')
+        if await custom_input.count() > 0:
+            await custom_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
+            logger.info("📤 Image uploaded via custom input")
+            return
+
+        raise Exception("Could not upload image")
+
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
@@ -74,24 +139,9 @@ class TaskExecutor:
             screenshot = self._resize_image(screenshot)
             await update.message.reply_photo(photo=BytesIO(screenshot), caption="🌐 Landing page (age accepted)")
 
-            # ---- Step 2: Upload using file chooser interception ----
-            logger.info("🔍 Looking for upload area...")
-            # Find the upload area by text
-            upload_area = page.locator('div:has-text("Files supported"), div:has-text("Upload your photo"), div:has-text("drag and drop")').first
-            if await upload_area.count() == 0:
-                # Fallback: click any element with upload text
-                upload_area = page.locator('div:has-text("upload"), div:has-text("Choose"), div:has-text("Browse")').first
-                if await upload_area.count() == 0:
-                    raise Exception("No upload area found")
-
-            logger.info("📤 Clicking upload area and intercepting file chooser...")
-            # Intercept file chooser
-            async with page.expect_file_chooser() as fc_info:
-                await upload_area.click()
-            file_chooser = await fc_info.value
-            logger.info("✅ File chooser intercepted")
-            await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
-            logger.info("📤 Image uploaded")
+            # ---- Step 2: Upload ----
+            logger.info("📤 Uploading image...")
+            await self._upload_image(page, image_bytes)
             await page.wait_for_timeout(3000)
 
             # ---- Step 3: Consent Popup ----

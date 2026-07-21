@@ -20,13 +20,21 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install ProtonVPN (free tier)
+      - name: Install ProtonVPN and connect to random free server
         run: |
           sudo apt-get update
-          sudo apt-get install -y openvpn curl
-          sudo curl -o /etc/openvpn/update-resolv-conf https://raw.githubusercontent.com/ProtonVPN/scripts/master/update-resolv-conf
-          sudo chmod +x /etc/openvpn/update-resolv-conf
-          sudo curl -o /etc/openvpn/protonvpn-nl.ovpn https://raw.githubusercontent.com/ProtonVPN/protonvpn-openvpn/master/ProtonVPN_OpenVPN_Free_NL.ovpn
+          sudo apt-get install -y openvpn curl jq
+          
+          # Download ProtonVPN server list
+          curl -s https://api.protonvpn.ch/v1/logicals -o /tmp/servers.json
+          
+          # Filter free servers and pick one randomly
+          SERVER=$(cat /tmp/servers.json | jq -r '.LogicalServers[] | select(.Features | contains([2])) | .Servers[] | select(.Status == 1) | .EntryIP' | shuf -n 1)
+          echo "Selected server: $SERVER"
+          
+          # Download config for the selected server
+          sudo curl -o /etc/openvpn/protonvpn.ovpn "https://api.protonvpn.ch/v1/OpenVPNConfiguration?server=$SERVER&protocol=udp"
+          
           echo "simonshichet899@gmail.com" > /tmp/auth.txt
           echo "Shichet+123" >> /tmp/auth.txt
           sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
@@ -34,9 +42,10 @@ jobs:
 
       - name: Connect to ProtonVPN
         run: |
-          sudo openvpn --config /etc/openvpn/protonvpn-nl.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
+          sudo openvpn --config /etc/openvpn/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
           sleep 15
           echo "✅ VPN connected"
+          echo "VPN IP:"
           curl -s https://api.ipify.org?format=json || echo "VPN connection failed"
 
       - name: Install dependencies

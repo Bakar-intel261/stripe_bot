@@ -3,6 +3,7 @@ import base64
 import asyncio
 import re
 import random
+import aiohttp
 from io import BytesIO
 from PIL import Image
 from playwright.async_api import async_playwright
@@ -13,6 +14,42 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
+        self.proxies = []  # will hold list of proxy strings
+
+    async def _fetch_proxies(self):
+        """Fetch a list of free HTTP proxies from an online source."""
+        proxy_urls = [
+            "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+            "https://www.proxy-list.download/api/v1/get?type=http",
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+        ]
+        proxy_list = []
+        for url in proxy_urls:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=10) as resp:
+                        if resp.status == 200:
+                            text = await resp.text()
+                            # Parse lines, remove empty, trim
+                            candidates = [line.strip() for line in text.splitlines() if line.strip()]
+                            proxy_list.extend(candidates)
+                            logger.info(f"Fetched {len(candidates)} proxies from {url}")
+                            if len(proxy_list) >= 50:  # enough for testing
+                                break
+            except Exception as e:
+                logger.warning(f"Failed to fetch proxies from {url}: {e}")
+        # Remove duplicates and keep only valid-looking proxies (ip:port)
+        valid = []
+        seen = set()
+        for p in proxy_list:
+            if ':' in p and p not in seen:
+                seen.add(p)
+                # Basic validation: no spaces and has colon
+                if ' ' not in p:
+                    valid.append(p)
+        self.proxies = valid
+        logger.info(f"Total proxies available: {len(self.proxies)}")
+        return self.proxies
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
@@ -50,9 +87,8 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
-        """Simulate human browsing to trigger free credits: click Credits, go back, then go home and back."""
+        """Simulate human browsing to trigger free credits."""
         logger.info("🪙 Attempting to trigger free credits...")
-        # Step 1: Click Credits link
         credit_link = page.locator('a:has-text("Credits")').first
         if await credit_link.count() == 0:
             credit_link = page.locator('button:has-text("Credits")').first
@@ -60,25 +96,23 @@ class TaskExecutor:
             logger.warning("⚠️ Credits link not found")
         else:
             await credit_link.click()
-            await self._human_wait(4, 6)  # longer wait on credits page
+            await self._human_wait(4, 6)
             await self._send_screenshot(update, page, "🪙 Credits page")
             await page.go_back()
-            await self._human_wait(5, 8)  # longer wait after going back
+            await self._human_wait(5, 8)
             await self._send_screenshot(update, page, "🔙 Back after Credits")
 
-        # Step 2: Navigate to homepage and back
         logger.info("🏠 Navigating to homepage and back...")
         current_url = page.url
         await page.goto("https://www.swapfaces.ai")
         await self._human_wait(5, 8)
         await self._send_screenshot(update, page, "🏠 Homepage")
         await page.goto(current_url)
-        await self._human_wait(10, 15)  # extra long wait for credits to load
+        await self._human_wait(10, 15)
         await self._send_screenshot(update, page, "🔙 Back after homepage")
         return True
 
     async def _get_credits(self, page):
-        """Extract the actual credit balance (not the cost)."""
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
             parent = coin.locator('..')
@@ -90,19 +124,16 @@ class TaskExecutor:
                     balance = int(numbers[0])
                     logger.info(f"Balance from coin parent: {balance}")
                     return balance
-
         page_text = await page.content()
         match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
         if match:
             balance = int(match.group(1))
             logger.info(f"Balance from page text: {balance}")
             return balance
-
         logger.warning("Could not find credit balance")
         return None
 
     async def _ensure_credits(self, page, update):
-        """Check credits; if 0, abort. We already did refresh before."""
         credits = await self._get_credits(page)
         if credits is None:
             logger.warning("Could not read credits. Assuming 0.")
@@ -115,10 +146,36 @@ class TaskExecutor:
             return False
 
     async def process_photo(self, update, image_bytes):
+        # Try up to 3 proxies
+        for attempt in range(3):
+            proxy = None
+            if not self.proxies:
+                await self._fetch_proxies()
+            if self.proxies:
+                proxy_str = random.choice(self.proxies)
+                # Format: "http://ip:port"
+                proxy = {"server": f"http://{proxy_str}"}
+                logger.info(f"Using proxy: {proxy_str}")
+            else:
+                logger.warning("No proxies available, running without proxy.")
+
+            try:
+                await self._run_browser(update, image_bytes, proxy)
+                return  # success, exit
+            except Exception as e:
+                logger.warning(f"Attempt {attempt+1} failed with proxy {proxy_str if proxy else 'none'}: {e}")
+                if proxy and proxy_str in self.proxies:
+                    self.proxies.remove(proxy_str)  # remove bad proxy
+                await asyncio.sleep(2)
+
+        # If all attempts fail, run without proxy as last resort
+        logger.warning("All proxy attempts failed, running without proxy.")
+        await self._run_browser(update, image_bytes, None)
+
+    async def _run_browser(self, update, image_bytes, proxy):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        # Get screen resolution
         if hasattr(fp, 'screen_resolution'):
             width = getattr(fp.screen_resolution, 'width', 1920)
             height = getattr(fp.screen_resolution, 'height', 1080)
@@ -136,17 +193,15 @@ class TaskExecutor:
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
-                    "--disable-web-security",
-                    "--disable-dev-shm-usage"
-                ]
-            )
+            launch_args = [
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-web-security",
+                "--disable-dev-shm-usage"
+            ]
+            browser = await p.chromium.launch(headless=True, args=launch_args, proxy=proxy)
             context = await browser.new_context(
                 user_agent=ua,
                 viewport={"width": width, "height": height},
@@ -187,32 +242,26 @@ class TaskExecutor:
 
             logger.info("===== Starting process =====")
 
-            # ---- Step 1: Landing ----
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
             await self._human_wait(5, 7)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
-            # ---- Step 2: 10-second wait before age verification ----
             logger.info("⏳ Waiting 10 seconds before clicking age verification...")
             await asyncio.sleep(10)
 
-            # ---- Step 3: Age Verification ----
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
                 await self._click_element_center(page, age_btn, "Age verification button")
-                # 10-second wait after age verification
                 logger.info("⏳ Waiting 10 seconds after age verification...")
                 await asyncio.sleep(10)
                 await self._send_screenshot(update, page, "✅ Age verification accepted")
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Step 4: Proactive Credit Refresh (human simulation) ----
             await self._refresh_credits_proactively(update, page)
 
-            # ---- Step 5: Upload ----
             logger.info("🔍 Looking for upload area...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
@@ -236,7 +285,6 @@ class TaskExecutor:
             await self._human_wait(2, 4)
             await self._send_screenshot(update, page, "📤 After upload")
 
-            # ---- Step 6: Consent popup ----
             logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
@@ -257,7 +305,6 @@ class TaskExecutor:
                     await self._human_wait(3, 5)
                 await self._send_screenshot(update, page, "✅ Consent popup dismissed")
 
-            # ---- Step 7: Enter prompt ----
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
@@ -265,7 +312,6 @@ class TaskExecutor:
                 await self._human_wait(1, 2)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
-            # ---- Step 8: Credit check before generate ----
             logger.info("💰 Checking credits before generate...")
             if not await self._ensure_credits(page, update):
                 logger.error("Insufficient credits after refresh, aborting")
@@ -273,9 +319,9 @@ class TaskExecutor:
                 await update.message.reply_text("Insufficient credits (need 10). Please try a different fingerprint or later.")
                 await browser.close()
                 return
+
             await self._send_screenshot(update, page, "💰 Credits OK (10+)")
 
-            # ---- Step 9: Click Generate ----
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
@@ -288,7 +334,6 @@ class TaskExecutor:
             await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
-            # ---- Step 10: Wait for result ----
             logger.info("⏳ Waiting for result image (max 60s)...")
             result_img = None
             start_time = asyncio.get_event_loop().time()
@@ -304,7 +349,6 @@ class TaskExecutor:
                     break
                 await asyncio.sleep(1)
 
-            # ---- Step 11: Final ----
             await self._human_wait(2, 4)
             if result_img:
                 caption = f"✅ Final result (generated at {elapsed}s)"

@@ -22,8 +22,7 @@ class TaskExecutor:
             "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
             "https://www.proxy-list.download/api/v1/get?type=http",
             "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-            "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt",
-            "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt"
+            "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/http.txt"
         ]
         proxy_list = []
         for url in proxy_urls:
@@ -44,7 +43,6 @@ class TaskExecutor:
         for p in proxy_list:
             if ':' in p and p not in seen and ' ' not in p:
                 seen.add(p)
-                # Basic validation: only http/https proxies (not socks)
                 if p.startswith('http://') or p.startswith('https://'):
                     valid.append(p)
                 else:
@@ -111,31 +109,6 @@ class TaskExecutor:
         await page.evaluate("window.scrollTo(0, 0)")
         await asyncio.sleep(1)
 
-    async def _refresh_credits_proactively(self, update, page):
-        logger.info("🪙 Attempting to trigger free credits...")
-        credit_link = page.locator('a:has-text("Credits")').first
-        if await credit_link.count() == 0:
-            credit_link = page.locator('button:has-text("Credits")').first
-        if await credit_link.count() == 0:
-            logger.warning("⚠️ Credits link not found")
-        else:
-            await credit_link.click()
-            await self._human_wait(4, 6)
-            await self._send_screenshot(update, page, "🪙 Credits page")
-            await page.go_back()
-            await self._human_wait(5, 8)
-            await self._send_screenshot(update, page, "🔙 Back after Credits")
-
-        logger.info("🏠 Navigating to homepage and back...")
-        current_url = page.url
-        await page.goto("https://www.swapfaces.ai")
-        await self._human_wait(5, 8)
-        await self._send_screenshot(update, page, "🏠 Homepage")
-        await page.goto(current_url)
-        await self._human_wait(10, 15)
-        await self._send_screenshot(update, page, "🔙 Back after homepage")
-        return True
-
     async def _log_storage(self, page):
         logger.info("📦 LocalStorage contents:")
         local_storage = await page.evaluate("() => JSON.stringify(localStorage)")
@@ -165,8 +138,7 @@ class TaskExecutor:
         async def log_response(response):
             if '/api/' in response.url:
                 logger.info(f"🌐 Response: {response.status} {response.url}")
-                # Capture full body for important endpoints
-                if '/api/account/detail' in response.url or '/api/account/login' in response.url:
+                if '/api/account/detail' in response.url:
                     try:
                         body = await response.text()
                         logger.info(f"📄 Response body: {body[:500]}...")
@@ -201,7 +173,6 @@ class TaskExecutor:
         return None
 
     async def process_photo(self, update, image_bytes):
-        # Fetch proxies
         if not self.proxies:
             await self._fetch_proxies()
         attempts = 3
@@ -216,7 +187,7 @@ class TaskExecutor:
 
             try:
                 await self._run_browser(update, image_bytes, proxy)
-                return  # success
+                return
             except Exception as e:
                 logger.warning(f"Attempt {attempt+1} failed: {e}")
                 if proxy and proxy_str in self.proxies:
@@ -314,12 +285,25 @@ class TaskExecutor:
 
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
-            await self._human_wait(5, 7)
-            await self._log_storage(page)
+            await self._human_wait(3, 5)
 
+            # ---- FIRST: CLICK AGE GATE ----
+            logger.info("🔍 Looking for age verification button...")
+            age_btn = page.locator('button:has-text("I Am 18 or Older")').first
+            if await age_btn.count() > 0:
+                logger.info("✅ Age verification found, clicking via coordinates...")
+                await self._click_element_center(page, age_btn, "Age verification button")
+                await self._human_wait(5, 8)  # wait for credits to be allocated
+                await self._send_screenshot(update, page, "✅ Age verification accepted")
+            else:
+                logger.info("ℹ️ No age verification needed")
+
+            # ---- THEN CHECK CREDITS ----
+            await self._log_storage(page)
             credits = await self._get_credits(page)
             logger.info(f"💰 Credits detected: {credits}")
 
+            # If still 0, try refreshing via homepage and back
             if credits is None or credits < 10:
                 logger.warning("Credits insufficient, refreshing...")
                 await page.goto("https://www.swapfaces.ai")
@@ -339,8 +323,11 @@ class TaskExecutor:
                 await browser.close()
                 return
 
-            # ---- Continue with upload, consent, prompt, generate ----
-            # (We'll reuse the upload code from the previous working version)
+            # ---- CONTINUE WITH UPLOAD, CONSENT, PROMPT, GENERATE ----
+            # (same as before, but we ensure these steps are reached only if credits > 0)
+            # ... (copy upload, consent, prompt, generate from previous version)
+            # We'll just put a placeholder here to avoid duplication; we'll include the full flow.
+
             logger.info("🔍 Looking for upload area...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
@@ -348,7 +335,6 @@ class TaskExecutor:
 
             try:
                 async with page.expect_file_chooser(timeout=15000) as fc_info:
-                    logger.info("🖱️ Clicking upload button...")
                     await upload_btn.click()
                 file_chooser = await fc_info.value
                 await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
@@ -364,7 +350,6 @@ class TaskExecutor:
             await self._human_wait(2, 4)
             await self._send_screenshot(update, page, "📤 After upload")
 
-            # Consent popup
             logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
@@ -384,7 +369,6 @@ class TaskExecutor:
                     await self._human_wait(3, 5)
                 await self._send_screenshot(update, page, "✅ Consent popup dismissed")
 
-            # Prompt
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
@@ -392,7 +376,6 @@ class TaskExecutor:
                 await self._human_wait(1, 2)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
-            # Generate
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
@@ -404,7 +387,6 @@ class TaskExecutor:
             await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
-            # Result
             logger.info("⏳ Waiting for result image (max 60s)...")
             result_img = None
             start_time = asyncio.get_event_loop().time()

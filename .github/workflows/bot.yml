@@ -31,7 +31,7 @@ jobs:
       - name: Connect to ProtonVPN (random free server)
         run: |
           echo "🔑 Initializing ProtonVPN..."
-          python3 -m protonvpn_cli init --no-news
+          python3 -m protonvpn_cli init
           
           echo "🔐 Logging in..."
           python3 -m protonvpn_cli login simonshichet899@gmail.com Shichet+123

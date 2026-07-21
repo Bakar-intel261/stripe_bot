@@ -20,45 +20,8 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install OpenVPN and connect
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openvpn curl jq
-
-          # Create auth file with credentials
-          echo "TKns6zrWuLiQxg9K" > /tmp/auth.txt
-          echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /tmp/auth.txt
-
-          # Create working config directly (US Free Server)
-          cat > /tmp/config.ovpn << 'OVPN'
-client
-dev tun
-proto udp
-remote 185.159.157.40 1194
-remote 185.159.157.42 1194
-remote 185.159.157.44 1194
-remote 185.159.157.46 1194
-remote 185.159.157.48 1194
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-remote-cert-tls server
-verify-x509-name ProtonVPN_Free_US name
-auth-user-pass /tmp/auth.txt
-comp-lzo
-verb 3
-OVPN
-
-          # Connect in background
-          sudo openvpn --config /tmp/config.ovpn --auth-user-pass /tmp/auth.txt --daemon
-
-          # Wait for connection
-          sleep 20
-
-          # Show IP
-          echo "🖥️ Current IP:"
-          curl -s https://api.ipify.org
+      - name: Connect to ProtonVPN
+        run: bash connect_vpn.sh
 
       - name: Install dependencies
         run: |

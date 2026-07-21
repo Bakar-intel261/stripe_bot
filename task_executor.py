@@ -82,22 +82,16 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _simulate_human_behavior(self, page):
-        """Scroll, move mouse, hover to mimic real user."""
         logger.info("👤 Simulating human behavior...")
-        # Scroll down and up
         await page.evaluate("window.scrollBy(0, 300)")
         await asyncio.sleep(random.uniform(1, 2))
         await page.evaluate("window.scrollBy(0, -150)")
         await asyncio.sleep(random.uniform(1, 2))
-
-        # Random mouse movements
         for _ in range(3):
             x = random.randint(100, 1800)
             y = random.randint(100, 900)
             await page.mouse.move(x, y)
             await asyncio.sleep(random.uniform(0.5, 1.5))
-
-        # Hover over some elements (e.g., styles or templates)
         try:
             style_item = page.locator('div.sf-image-to-image__style__item').first
             if await style_item.count() > 0:
@@ -105,8 +99,6 @@ class TaskExecutor:
                 await asyncio.sleep(1)
         except:
             pass
-
-        # Scroll to bottom and back
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(1.5)
         await page.evaluate("window.scrollTo(0, 0)")
@@ -234,7 +226,9 @@ class TaskExecutor:
                 "--safebrowsing-disable-auto-update",
                 f"--window-size={width},{height}"
             ]
+            # Use a real Chrome binary (channel="chrome")
             browser = await p.chromium.launch(
+                channel="chrome",  # <-- KEY CHANGE: use real Chrome
                 headless=True,
                 args=args,
                 proxy=proxy,
@@ -293,7 +287,6 @@ class TaskExecutor:
             await self._human_wait(5, 7)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
-            # ---- Human behavior simulation before age gate ----
             await self._simulate_human_behavior(page)
 
             logger.info("⏳ Waiting 10 seconds before clicking age verification...")

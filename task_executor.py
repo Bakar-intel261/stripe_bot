@@ -335,6 +335,11 @@ class TaskExecutor:
                             image_data = response.content
                             logger.info(f"✅ Downloaded image, size: {len(image_data)} bytes")
                             await browser.close()
+                            # Send the image to Telegram
+                            await update.message.reply_photo(
+                                photo=BytesIO(image_data),
+                                caption="✅ Here's your generated image!"
+                            )
                             return {
                                 "status": "success",
                                 "image": base64.b64encode(image_data).decode(),
@@ -350,6 +355,10 @@ class TaskExecutor:
                     # Fallback: take screenshot
                     screenshot_bytes = await page.screenshot(full_page=True)
                     await browser.close()
+                    await update.message.reply_photo(
+                        photo=BytesIO(screenshot_bytes),
+                        caption="⚠️ Download failed, here's a screenshot of the page"
+                    )
                     return {
                         "status": "success",
                         "image": base64.b64encode(screenshot_bytes).decode(),
@@ -361,6 +370,10 @@ class TaskExecutor:
                 logger.warning("ℹ️ No download button found, taking screenshot as fallback")
                 screenshot_bytes = await page.screenshot(full_page=True)
                 await browser.close()
+                await update.message.reply_photo(
+                    photo=BytesIO(screenshot_bytes),
+                    caption="⚠️ No download button found, here's a screenshot of the page"
+                )
                 return {
                     "status": "success",
                     "image": base64.b64encode(screenshot_bytes).decode(),
@@ -371,6 +384,10 @@ class TaskExecutor:
             # If we reach here, something went wrong
             screenshot_bytes = await page.screenshot(full_page=True)
             await browser.close()
+            await update.message.reply_photo(
+                photo=BytesIO(screenshot_bytes),
+                caption="⚠️ Something went wrong, here's a screenshot of the page"
+            )
             return {
                 "status": "success",
                 "image": base64.b64encode(screenshot_bytes).decode(),

@@ -290,128 +290,68 @@ class TaskExecutor:
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
             # ================================================================
-            # DEBUG: DUMP ALL IMAGES ON THE PAGE
+            # WAIT FOR GENERATION AND FIND DOWNLOAD BUTTON
             # ================================================================
-            logger.info("📸 Debug: Dumping all images on page...")
-            images = await page.locator('img').all()
-            logger.info(f"Found {len(images)} images on page")
-            for idx, img in enumerate(images):
-                src = await img.get_attribute('src') or 'no-src'
-                cls = await img.get_attribute('class') or 'no-class'
-                box = await img.bounding_box()
-                size = f"{box['width']}x{box['height']}" if box else 'hidden'
-                logger.info(f"Image {idx}: src={src[:50]}..., class={cls}, size={size}")
+            logger.info("⏳ Waiting 30 seconds for generation...")
+            await asyncio.sleep(30)
 
-            # ================================================================
-            # IMPROVED RESULT IMAGE DETECTION
-            # ================================================================
-            logger.info("⏳ Waiting for result image (max 60s)...")
-            
-            result_img = None
-            start_time = asyncio.get_event_loop().time()
-            timeout = 60
-            
-            while (asyncio.get_event_loop().time() - start_time) < timeout:
-                elapsed = int(asyncio.get_event_loop().time() - start_time)
-                
-                # Get all images
-                images = await page.locator('img').all()
-                
-                for img in images:
-                    src = await img.get_attribute('src') or ''
-                    cls = await img.get_attribute('class') or ''
-                    box = await img.bounding_box()
-                    
-                    # Check if it's a valid image
-                    if not box or box['width'] < 10 or box['height'] < 10:
-                        continue
-                    
-                    # Strategy 1: Data URL (most common for generated images)
-                    if src.startswith('data:image'):
-                        result_img = img
-                        logger.info(f"✅ Result found: data:image (elapsed {elapsed}s)")
-                        break
-                    
-                    # Strategy 2: Specific classes
-                    if 'result' in cls.lower() or 'output' in cls.lower() or 'generated' in cls.lower():
-                        result_img = img
-                        logger.info(f"✅ Result found: class '{cls}' (elapsed {elapsed}s)")
-                        break
-                
-                if result_img:
-                    break
-                
-                # Check canvas elements
-                canvases = await page.locator('canvas').all()
-                for canvas in canvases:
-                    box = await canvas.bounding_box()
-                    if box and box['width'] > 50 and box['height'] > 50:
+            # === DEBUG: Find all download-related elements ===
+            logger.info("🔍 Looking for download button...")
+
+            # Try common download selectors
+            download_selectors = [
+                'a[download]',
+                'a[href*="download"]',
+                'button[aria-label*="Download" i]',
+                'button[title*="Download" i]',
+                'div[aria-label*="Download" i]',
+                'div[title*="Download" i]',
+                'img[alt*="download" i]',
+                'svg[aria-label*="download" i]',
+                'a[href$=".png"]',
+                'a[href$=".jpg"]',
+                'a[href$=".jpeg"]',
+                'a[href$=".webp"]',
+            ]
+
+            for sel in download_selectors:
+                elements = await page.locator(sel).all()
+                if elements:
+                    logger.info(f"Found {len(elements)} elements with selector: {sel}")
+                    for idx, el in enumerate(elements):
                         try:
-                            data_url = await page.evaluate('(canvas) => canvas.toDataURL("image/png")', canvas)
-                            if data_url and data_url.startswith('data:image'):
-                                logger.info(f"✅ Found result on canvas (elapsed {elapsed}s)")
-                                screenshot_bytes = await page.screenshot(clip={"x": box['x'], "y": box['y'], "width": box['width'], "height": box['height']})
-                                await browser.close()
-                                return {
-                                    "status": "success",
-                                    "image": base64.b64encode(screenshot_bytes).decode(),
-                                    "method": "canvas",
-                                    "size": len(screenshot_bytes)
-                                }
+                            html = await el.evaluate('el => el.outerHTML')
+                            logger.info(f"Element {idx}: {html[:200]}...")
                         except:
                             pass
-                
-                await asyncio.sleep(1)
-            
-            # If we found a result image, download it
-            if result_img:
-                src = await result_img.get_attribute('src')
-                if src and src.startswith('data:image'):
-                    match = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', src)
-                    if match:
-                        image_data = base64.b64decode(match.group(2))
-                        await browser.close()
-                        return {
-                            "status": "success",
-                            "image": base64.b64encode(image_data).decode(),
-                            "method": "data_url",
-                            "size": len(image_data)
-                        }
-                elif src and src.startswith('blob:'):
-                    try:
-                        js_code = """
-                            async (url) => {
-                                const response = await fetch(url);
-                                const blob = await response.blob();
-                                return new Promise((resolve) => {
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => resolve(reader.result);
-                                    reader.readAsDataURL(blob);
-                                });
-                            }
-                        """
-                        data_url = await page.evaluate(js_code, src)
-                        if data_url and data_url.startswith('data:image'):
-                            match = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', data_url)
-                            if match:
-                                image_data = base64.b64decode(match.group(2))
-                                await browser.close()
-                                return {
-                                    "status": "success",
-                                    "image": base64.b64encode(image_data).decode(),
-                                    "method": "blob",
-                                    "size": len(image_data)
-                                }
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch blob URL: {e}")
-            
-            # Fallback: take a full page screenshot
-            logger.warning("ℹ️ No result image found, taking full-page screenshot as fallback")
+
+            # Also try to find any button with an SVG or image inside
+            logger.info("🔍 Looking for buttons with icons/images inside...")
+            buttons_with_icons = await page.locator('button:has(img), button:has(svg), div[role="button"]:has(img), div[role="button"]:has(svg)').all()
+            logger.info(f"Found {len(buttons_with_icons)} buttons with icons")
+
+            # Clickable elements near the generated image
+            # Try to find any clickable element that appears after generation
+            all_buttons = await page.locator('button').all()
+            logger.info(f"Found {len(all_buttons)} total buttons on page")
+            for idx, btn in enumerate(all_buttons):
+                try:
+                    text = await btn.text_content() or ""
+                    if text.strip():
+                        logger.info(f"Button {idx}: text='{text.strip()[:50]}'")
+                except:
+                    pass
+
+            # ================================================================
+            # FALLBACK: Take full-page screenshot if no download button found
+            # ================================================================
             screenshot_bytes = await page.screenshot(full_page=True)
+            
             await browser.close()
+            
             return {
                 "status": "success",
                 "image": base64.b64encode(screenshot_bytes).decode(),
-                "method": "screenshot_fallback",
+                "method": "full_page_screenshot",
                 "size": len(screenshot_bytes)
             }

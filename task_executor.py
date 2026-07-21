@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
-        logger.info("🚀 SCRAPERAPI ENDPOINT METHOD DEPLOYED")
+        logger.info("🚀 VPN COMPATIBLE VERSION DEPLOYED")
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
@@ -107,11 +107,7 @@ class TaskExecutor:
             return False
 
     async def process_photo(self, update, image_bytes):
-        api_key = os.environ.get("SCRAPERAPI_KEY", "bc1b1288b01dcf7bb5cc8e820b9daa82")
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
-        scraper_url = f"https://api.scraperapi.com?api_key={api_key}&url={target_url}"
-        logger.info(f"🌐 Using ScraperAPI endpoint: {scraper_url[:80]}...")
-
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         if hasattr(fp, 'screen_resolution'):
@@ -130,6 +126,7 @@ class TaskExecutor:
         timezone = getattr(fp, 'timezone', 'America/New_York')
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
+        # No proxy – VPN is used at system level
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 channel="chrome",
@@ -183,8 +180,8 @@ class TaskExecutor:
 
             logger.info("===== Starting process =====")
 
-            logger.info("🌐 Navigating through ScraperAPI...")
-            await page.goto(scraper_url, wait_until="networkidle", timeout=30000)
+            logger.info("🌐 Navigating to swapfaces.ai")
+            await page.goto(target_url, wait_until="networkidle", timeout=30000)
 
             try:
                 ip = await page.evaluate("() => fetch('https://api.ipify.org?format=json').then(r => r.json()).then(data => data.ip)")

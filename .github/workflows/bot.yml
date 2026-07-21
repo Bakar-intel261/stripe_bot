@@ -28,16 +28,13 @@ jobs:
       - name: Get free server from ProtonVPN API
         run: |
           echo "🔄 Fetching free servers from ProtonVPN API..."
-          # Get list of free servers from ProtonVPN
           curl -s https://api.protonvpn.ch/v1/logicals -o /tmp/servers.json
           
-          # Pick a random free server (Free tier has Feature ID 2)
           SERVER_NAME=$(cat /tmp/servers.json | jq -r '.LogicalServers[] | select(.Features | contains([2])) | .Name' | shuf -n 1)
           SERVER_IP=$(cat /tmp/servers.json | jq -r --arg name "$SERVER_NAME" '.LogicalServers[] | select(.Name == $name) | .Servers[] | select(.Status == 1) | .EntryIP' | head -1)
           
           echo "✅ Selected server: $SERVER_NAME ($SERVER_IP)"
           
-          # Create OpenVPN config file
           cat > /tmp/protonvpn.ovpn << EOF
 client
 dev tun

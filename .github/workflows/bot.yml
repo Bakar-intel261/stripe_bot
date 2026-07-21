@@ -23,21 +23,22 @@ jobs:
       - name: Install ProtonVPN CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip python3-venv openvpn
+          sudo apt-get install -y openvpn
           python3 -m pip install --user protonvpn-cli
-          export PATH="$PATH:$HOME/.local/bin"
-          # Initialize ProtonVPN
-          protonvpn-cli init --no-news
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Connect to ProtonVPN (random free server)
         run: |
           export PATH="$PATH:$HOME/.local/bin"
+          # Initialize ProtonVPN
+          protonvpn-cli init --no-news
           # Login
-          echo "simonshichet899@gmail.com" | protonvpn-cli login simonshichet899@gmail.com Shichet+123
+          protonvpn-cli login simonshichet899@gmail.com Shichet+123
           # Connect to random free server
           protonvpn-cli connect -r
           sleep 10
           echo "✅ VPN connected"
+          echo "VPN IP:"
           curl -s https://api.ipify.org?format=json || echo "VPN connection failed"
 
       - name: Install dependencies

@@ -60,20 +60,20 @@ class TaskExecutor:
             logger.warning("⚠️ Credits link not found")
         else:
             await credit_link.click()
-            await self._human_wait(3, 5)
+            await self._human_wait(4, 6)  # longer wait on credits page
             await self._send_screenshot(update, page, "🪙 Credits page")
             await page.go_back()
-            await self._human_wait(3, 5)
+            await self._human_wait(5, 8)  # longer wait after going back
             await self._send_screenshot(update, page, "🔙 Back after Credits")
 
         # Step 2: Navigate to homepage and back
         logger.info("🏠 Navigating to homepage and back...")
         current_url = page.url
         await page.goto("https://www.swapfaces.ai")
-        await self._human_wait(4, 6)
+        await self._human_wait(5, 8)
         await self._send_screenshot(update, page, "🏠 Homepage")
         await page.goto(current_url)
-        await self._human_wait(6, 10)  # longer wait for credits to load
+        await self._human_wait(10, 15)  # extra long wait for credits to load
         await self._send_screenshot(update, page, "🔙 Back after homepage")
         return True
 
@@ -190,23 +190,29 @@ class TaskExecutor:
             # ---- Step 1: Landing ----
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
-            await self._human_wait(3, 6)
+            await self._human_wait(5, 7)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
-            # ---- Step 2: Age Verification ----
+            # ---- Step 2: 10-second wait before age verification ----
+            logger.info("⏳ Waiting 10 seconds before clicking age verification...")
+            await asyncio.sleep(10)
+
+            # ---- Step 3: Age Verification ----
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
                 await self._click_element_center(page, age_btn, "Age verification button")
-                await self._human_wait(3, 5)
+                # 10-second wait after age verification
+                logger.info("⏳ Waiting 10 seconds after age verification...")
+                await asyncio.sleep(10)
                 await self._send_screenshot(update, page, "✅ Age verification accepted")
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Step 3: Proactive Credit Refresh (human simulation) ----
+            # ---- Step 4: Proactive Credit Refresh (human simulation) ----
             await self._refresh_credits_proactively(update, page)
 
-            # ---- Step 4: Upload ----
+            # ---- Step 5: Upload ----
             logger.info("🔍 Looking for upload area...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
@@ -230,7 +236,7 @@ class TaskExecutor:
             await self._human_wait(2, 4)
             await self._send_screenshot(update, page, "📤 After upload")
 
-            # ---- Step 5: Consent popup ----
+            # ---- Step 6: Consent popup ----
             logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
@@ -251,7 +257,7 @@ class TaskExecutor:
                     await self._human_wait(3, 5)
                 await self._send_screenshot(update, page, "✅ Consent popup dismissed")
 
-            # ---- Step 6: Enter prompt ----
+            # ---- Step 7: Enter prompt ----
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
@@ -259,7 +265,7 @@ class TaskExecutor:
                 await self._human_wait(1, 2)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
-            # ---- Step 7: Credit check before generate ----
+            # ---- Step 8: Credit check before generate ----
             logger.info("💰 Checking credits before generate...")
             if not await self._ensure_credits(page, update):
                 logger.error("Insufficient credits after refresh, aborting")
@@ -269,7 +275,7 @@ class TaskExecutor:
                 return
             await self._send_screenshot(update, page, "💰 Credits OK (10+)")
 
-            # ---- Step 8: Click Generate ----
+            # ---- Step 9: Click Generate ----
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
@@ -282,7 +288,7 @@ class TaskExecutor:
             await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
-            # ---- Step 9: Wait for result ----
+            # ---- Step 10: Wait for result ----
             logger.info("⏳ Waiting for result image (max 60s)...")
             result_img = None
             start_time = asyncio.get_event_loop().time()
@@ -298,7 +304,7 @@ class TaskExecutor:
                     break
                 await asyncio.sleep(1)
 
-            # ---- Step 10: Final ----
+            # ---- Step 11: Final ----
             await self._human_wait(2, 4)
             if result_img:
                 caption = f"✅ Final result (generated at {elapsed}s)"

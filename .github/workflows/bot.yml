@@ -25,29 +25,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openvpn curl jq
 
-      - name: Setup ProtonVPN config and credentials
+      - name: Create config and credentials
         run: |
-          # Create working config file (US Free Server)
-          sudo bash -c 'cat > /etc/openvpn/protonvpn.ovpn << "EOL"
+          sudo mkdir -p /etc/openvpn
+          sudo tee /etc/openvpn/auth.txt > /dev/null << AUTH
+TKns6zrWuLiQxg9K
+Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
+AUTH
+          sudo chmod 600 /etc/openvpn/auth.txt
+
+          sudo tee /etc/openvpn/protonvpn.ovpn > /dev/null << OVPN
 client
 dev tun
 proto udp
 remote us-01.protonvpn.com 1194
-remote us-02.protonvpn.com 1194
-remote us-03.protonvpn.com 1194
-remote us-04.protonvpn.com 1194
-remote us-05.protonvpn.com 1194
-remote us-06.protonvpn.com 1194
-remote us-07.protonvpn.com 1194
-remote us-08.protonvpn.com 1194
-remote us-09.protonvpn.com 1194
-remote us-10.protonvpn.com 1194
-remote us-11.protonvpn.com 1194
-remote us-12.protonvpn.com 1194
-remote us-13.protonvpn.com 1194
-remote us-14.protonvpn.com 1194
-remote us-15.protonvpn.com 1194
-remote us-16.protonvpn.com 1194
 resolv-retry infinite
 nobind
 persist-key
@@ -57,12 +48,7 @@ verify-x509-name ProtonVPN_Free_US name
 auth-user-pass /etc/openvpn/auth.txt
 comp-lzo
 verb 3
-EOL'
-
-          # Add credentials
-          sudo bash -c 'echo "TKns6zrWuLiQxg9K" > /etc/openvpn/auth.txt'
-          sudo bash -c 'echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /etc/openvpn/auth.txt'
-          sudo chmod 600 /etc/openvpn/auth.txt
+OVPN
 
       - name: Connect to ProtonVPN
         run: |
@@ -70,9 +56,8 @@ EOL'
           sudo openvpn --config /etc/openvpn/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
           sleep 20
           echo "✅ VPN connected"
-          echo "🖥️ Checking IP address..."
-          IP=$(curl -s https://api.ipify.org?format=json | jq -r '.ip' 2>/dev/null || echo "Failed to get IP")
-          echo "🖥️ Current IP: $IP"
+          echo "🖥️ Current IP:"
+          curl -s https://api.ipify.org
 
       - name: Install dependencies
         run: |

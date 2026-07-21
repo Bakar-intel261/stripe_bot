@@ -324,19 +324,27 @@ class TaskExecutor:
             if download_btn:
                 logger.info("🔄 Clicking download button...")
                 try:
-                    async with page.expect_download(timeout=10000) as download_info:
-                        await download_btn.click()
-                    download = await download_info.value
-                    # Get the downloaded file as bytes
-                    downloaded_bytes = await download.path().then(lambda path: open(path, 'rb').read())
-                    logger.info(f"✅ Downloaded: {download.suggested_filename}, size: {len(downloaded_bytes)} bytes")
-                    await browser.close()
-                    return {
-                        "status": "success",
-                        "image": base64.b64encode(downloaded_bytes).decode(),
-                        "method": "download",
-                        "size": len(downloaded_bytes)
-                    }
+                    # Get the href from the download link
+                    href = await download_btn.get_attribute('href')
+                    if href:
+                        logger.info(f"📥 Downloading from URL: {href[:100]}...")
+                        # Use requests to download the file
+                        import requests
+                        response = requests.get(href, timeout=30)
+                        if response.status_code == 200:
+                            image_data = response.content
+                            logger.info(f"✅ Downloaded image, size: {len(image_data)} bytes")
+                            await browser.close()
+                            return {
+                                "status": "success",
+                                "image": base64.b64encode(image_data).decode(),
+                                "method": "requests_download",
+                                "size": len(image_data)
+                            }
+                        else:
+                            logger.error(f"❌ Download failed: HTTP {response.status_code}")
+                    else:
+                        logger.warning("❌ No href found on download link")
                 except Exception as e:
                     logger.error(f"❌ Download failed: {e}")
                     # Fallback: take screenshot
@@ -359,3 +367,13 @@ class TaskExecutor:
                     "method": "screenshot_fallback",
                     "size": len(screenshot_bytes)
                 }
+
+            # If we reach here, something went wrong
+            screenshot_bytes = await page.screenshot(full_page=True)
+            await browser.close()
+            return {
+                "status": "success",
+                "image": base64.b64encode(screenshot_bytes).decode(),
+                "method": "screenshot_fallback",
+                "size": len(screenshot_bytes)
+            }

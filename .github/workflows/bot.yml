@@ -25,7 +25,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openvpn curl jq
 
-      - name: Get free server from ProtonVPN API
+      - name: Get free server and create config
         run: |
           echo "🔄 Fetching free servers from ProtonVPN API..."
           curl -s https://api.protonvpn.ch/v1/logicals -o /tmp/servers.json
@@ -35,7 +35,8 @@ jobs:
           
           echo "✅ Selected server: $SERVER_NAME ($SERVER_IP)"
           
-          cat > /tmp/protonvpn.ovpn << EOFVPN
+          # Create config file directly
+          sudo bash -c "cat > /etc/openvpn/protonvpn.ovpn << EOL
 client
 dev tun
 proto udp
@@ -46,18 +47,15 @@ persist-key
 persist-tun
 remote-cert-tls server
 verify-x509-name $SERVER_NAME name
-auth-user-pass /tmp/auth.txt
+auth-user-pass /etc/openvpn/auth.txt
 comp-lzo
 verb 3
-EOFVPN
-          
-          sudo mv /tmp/protonvpn.ovpn /etc/openvpn/protonvpn.ovpn
+EOL"
 
       - name: Setup credentials
         run: |
-          echo "TKns6zrWuLiQxg9K" > /tmp/auth.txt
-          echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /tmp/auth.txt
-          sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
+          sudo bash -c "echo 'TKns6zrWuLiQxg9K' > /etc/openvpn/auth.txt"
+          sudo bash -c "echo 'Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM' >> /etc/openvpn/auth.txt"
           sudo chmod 600 /etc/openvpn/auth.txt
 
       - name: Connect to ProtonVPN

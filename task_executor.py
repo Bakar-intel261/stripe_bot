@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
-        logger.info("🚀 FAST AUTO-TERMINATE VERSION")
+        logger.info("🚀 FORCE CLICK GENERATE FIX")
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
@@ -25,10 +25,6 @@ class TaskExecutor:
             img.convert("RGB").save(out, format="JPEG", quality=90)
             return out.getvalue()
         return image_bytes
-
-    async def _send_screenshot(self, update, page, caption):
-        # SCREENSHOTS REMOVED - this function is now a no-op
-        pass
 
     async def _click_element_center(self, page, locator, description="element"):
         try:
@@ -108,8 +104,9 @@ class TaskExecutor:
             return False
 
     async def _find_download_button(self, page):
-        """Find the download button."""
+        """Find download button after generation."""
         logger.info("🔍 Searching for download button...")
+        
         download_links = await page.locator('a[download]').all()
         if download_links:
             logger.info(f"✅ Found {len(download_links)} download links")
@@ -120,14 +117,23 @@ class TaskExecutor:
                     return link
             return download_links[0]
 
+        # Look for any button with download icon or text
+        buttons = await page.locator('button, div[role="button"]').all()
+        for btn in buttons:
+            try:
+                html = await btn.evaluate('el => el.outerHTML')
+                if 'download' in html.lower() or 'arrow' in html.lower() or '⬇' in html:
+                    logger.info(f"✅ Found potential download button")
+                    return btn
+            except:
+                pass
+
         logger.warning("❌ No download button found")
         return None
 
     async def process_photo(self, update, image_bytes, status_msg=None):
-        """Process a photo - upload, generate, download, and return result."""
         start_time = time.time()
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
-        # === FRESH FINGERPRINT FOR EVERY REQUEST ===
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         if hasattr(fp, 'screen_resolution'):
@@ -172,19 +178,16 @@ class TaskExecutor:
 
             logger.info("===== Starting process =====")
 
-            # === NAVIGATE ===
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
             await self._human_wait(2, 3)
 
-            # === AGE VERIFICATION ===
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking...")
                 await self._click_element_center(page, age_btn, "Age verification button")
                 await self._human_wait(2, 3)
 
-            # === UPLOAD ===
             logger.info("🔍 Looking for upload area...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
@@ -206,8 +209,6 @@ class TaskExecutor:
 
             await self._human_wait(2, 3)
 
-            # === CONSENT POPUP ===
-            logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
                 await consent_card.wait_for(state="visible", timeout=8000)
@@ -223,64 +224,69 @@ class TaskExecutor:
             except:
                 logger.warning("⚠️ Consent popup card did NOT appear")
 
-            # === ENTER PROMPT ===
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
                 await prompt_input.fill("Remove clothes")
                 await self._human_wait(1, 2)
 
-            # === CHECK CREDITS ===
             logger.info("💰 Checking credits before generate...")
             if not await self._ensure_credits(page, update):
                 logger.error("Insufficient credits, aborting")
                 await browser.close()
                 return {"status": "error", "error": "Insufficient credits"}
 
-            # === CLICK GENERATE ===
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
-            if await generate_btn.get_attribute('disabled'):
-                logger.warning("⚠️ Generate button is disabled")
-                await browser.close()
-                return {"status": "error", "error": "Generate button disabled"}
-            await self._click_element_center(page, generate_btn, "Generate button")
+            
+            # Check if disabled
+            is_disabled = await generate_btn.get_attribute('disabled')
+            if is_disabled:
+                logger.warning("⚠️ Generate button is disabled, waiting for it to become enabled...")
+                # Wait for it to become enabled (up to 10 seconds)
+                for _ in range(10):
+                    await asyncio.sleep(1)
+                    is_disabled = await generate_btn.get_attribute('disabled')
+                    if not is_disabled:
+                        logger.info("✅ Generate button is now enabled")
+                        break
+                else:
+                    logger.error("❌ Generate button never became enabled")
+                    await browser.close()
+                    return {"status": "error", "error": "Generate button never enabled"}
+
+            # === FORCE CLICK WITH JAVASCRIPT ===
+            logger.info("🔄 Clicking generate button with JavaScript...")
+            try:
+                # Method 1: JavaScript click (most reliable)
+                await page.evaluate('(btn) => btn.click()', generate_btn)
+                logger.info("✅ JavaScript click executed")
+            except Exception as e:
+                logger.warning(f"JavaScript click failed: {e}, trying regular click")
+                await generate_btn.click(force=True)
+                logger.info("✅ Force click executed")
+
             await self._human_wait(2, 3)
 
-            # === WAIT 5 SECONDS, THEN START SEARCHING ===
-            logger.info("⏳ Waiting 5 seconds before checking for download button...")
-            await asyncio.sleep(5)
+            # === WAIT FOR GENERATION AND DOWNLOAD BUTTON ===
+            logger.info("⏳ Waiting for generation to complete...")
+            await asyncio.sleep(8)  # Wait for generation to finish
 
-            # === SEARCH FOR DOWNLOAD BUTTON (MAX 10 SECONDS) ===
-            logger.info("⏳ Searching for download button (max 10s)...")
+            logger.info("🔍 Searching for download button...")
             download_btn = None
-            start_search = time.time()
-            timeout = 10
-
-            while (time.time() - start_search) < timeout:
-                elapsed = int(time.time() - start_search)
-                logger.info(f"🔍 Attempt {elapsed+1}s: Looking for download button...")
+            for i in range(10):  # Try for 10 seconds
                 download_btn = await self._find_download_button(page)
-
                 if download_btn:
-                    logger.info(f"✅ Download button found at {elapsed}s!")
+                    logger.info(f"✅ Download button found at {i+1}s!")
                     break
-
                 await asyncio.sleep(1)
 
-            # === FINAL CHECK BEFORE TIMEOUT ===
-            if not download_btn:
-                logger.info("🔍 Final check before timeout...")
-                download_btn = await self._find_download_button(page)
-
-            # === CLICK DOWNLOAD BUTTON ===
             if download_btn:
                 logger.info("🔄 Clicking download button...")
                 try:
                     href = await download_btn.get_attribute('href')
                     if href:
-                        logger.info(f"📥 Downloading from URL: {href[:100]}...")
                         import requests
                         response = requests.get(href, timeout=30)
                         if response.status_code == 200:
@@ -295,17 +301,22 @@ class TaskExecutor:
                                 "size": len(image_data),
                                 "time": total_time
                             }
-                        else:
-                            logger.error(f"❌ Download failed: HTTP {response.status_code}")
-                    else:
-                        logger.warning("❌ No href found on download link")
                 except Exception as e:
                     logger.error(f"❌ Download failed: {e}")
             else:
-                logger.warning("ℹ️ No download button found")
+                logger.warning("ℹ️ No download button found, taking screenshot as fallback")
+                screenshot_bytes = await page.screenshot(full_page=True)
+                await browser.close()
+                total_time = int(time.time() - start_time)
+                return {
+                    "status": "success",
+                    "image": base64.b64encode(screenshot_bytes).decode(),
+                    "method": "screenshot_fallback",
+                    "size": len(screenshot_bytes),
+                    "time": total_time
+                }
 
-            # === FALLBACK: Take screenshot ===
-            logger.warning("ℹ️ No download button found, taking screenshot as fallback")
+            # Fallback
             screenshot_bytes = await page.screenshot(full_page=True)
             await browser.close()
             total_time = int(time.time() - start_time)

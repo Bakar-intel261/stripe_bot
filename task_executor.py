@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
-        logger.info("🚀 NEW CODE DEPLOYED WITH PROXY SUPPORT - v2.0")  # <-- UNIQUE LOG
+        logger.info("🚀 NEW CODE DEPLOYED WITH PROXY SUPPORT - v2.0")
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
@@ -126,6 +126,7 @@ class TaskExecutor:
         timezone = getattr(fp, 'timezone', 'America/New_York')
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
+        # Proxy in username:password@host:port format
         proxy_url = os.environ.get("PROXY_URL")
         proxy = {"server": proxy_url} if proxy_url else None
         if proxy:
@@ -141,7 +142,8 @@ class TaskExecutor:
                     "--disable-blink-features=AutomationControlled",
                     "--disable-features=IsolateOrigins,site-per-process",
                     "--disable-web-security",
-                    "--disable-dev-shm-usage"
+                    "--disable-dev-shm-usage",
+                    "--ignore-certificate-errors"  # Required for ScraperAPI
                 ],
                 proxy=proxy
             )
@@ -151,6 +153,7 @@ class TaskExecutor:
                 locale=locale,
                 timezone_id=timezone,
                 device_scale_factor=1,
+                ignore_https_errors=True,  # Required for ScraperAPI
                 extra_http_headers={
                     'Accept-Language': f"{locale},en;q=0.9",
                     'Accept-Encoding': 'gzip, deflate, br',

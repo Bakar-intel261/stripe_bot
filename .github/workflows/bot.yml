@@ -20,6 +20,34 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Install OpenVPN
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openvpn curl jq
+
+      - name: Download ProtonVPN config
+        run: |
+          # Get a free US server config directly from ProtonVPN
+          curl -o /tmp/protonvpn.ovpn "https://raw.githubusercontent.com/ProtonVPN/protonvpn-openvpn/master/ProtonVPN_OpenVPN_Free_US.ovpn"
+
+      - name: Setup OpenVPN credentials
+        run: |
+          # Use OpenVPN credentials (not Proton Account credentials)
+          echo "TKns6zrWuLiQxg9K" > /tmp/auth.txt
+          echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /tmp/auth.txt
+          sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
+          sudo chmod 600 /etc/openvpn/auth.txt
+
+      - name: Connect to ProtonVPN
+        run: |
+          echo "🌐 Connecting to ProtonVPN..."
+          sudo openvpn --config /tmp/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
+          sleep 15
+          echo "✅ VPN connected"
+          echo "🖥️ Checking IP address..."
+          IP=$(curl -s https://api.ipify.org?format=json | jq -r '.ip' 2>/dev/null || echo "Failed to get IP")
+          echo "🖥️ Current IP: $IP"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -30,7 +58,6 @@ jobs:
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          PROXY_URL: ${{ secrets.PROXY_URL }}
 
       - name: Commit updated used_fingerprints.json (if any)
         run: |

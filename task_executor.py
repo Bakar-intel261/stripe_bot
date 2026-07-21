@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
-        self.proxies = []  # will hold list of proxy strings
+        self.proxies = []
 
     async def _fetch_proxies(self):
-        """Fetch a list of free HTTP proxies from an online source."""
         proxy_urls = [
             "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
             "https://www.proxy-list.download/api/v1/get?type=http",
@@ -30,23 +29,19 @@ class TaskExecutor:
                     async with session.get(url, timeout=10) as resp:
                         if resp.status == 200:
                             text = await resp.text()
-                            # Parse lines, remove empty, trim
                             candidates = [line.strip() for line in text.splitlines() if line.strip()]
                             proxy_list.extend(candidates)
                             logger.info(f"Fetched {len(candidates)} proxies from {url}")
-                            if len(proxy_list) >= 50:  # enough for testing
+                            if len(proxy_list) >= 50:
                                 break
             except Exception as e:
                 logger.warning(f"Failed to fetch proxies from {url}: {e}")
-        # Remove duplicates and keep only valid-looking proxies (ip:port)
         valid = []
         seen = set()
         for p in proxy_list:
-            if ':' in p and p not in seen:
+            if ':' in p and p not in seen and ' ' not in p:
                 seen.add(p)
-                # Basic validation: no spaces and has colon
-                if ' ' not in p:
-                    valid.append(p)
+                valid.append(p)
         self.proxies = valid
         logger.info(f"Total proxies available: {len(self.proxies)}")
         return self.proxies
@@ -87,7 +82,6 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
-        """Simulate human browsing to trigger free credits."""
         logger.info("🪙 Attempting to trigger free credits...")
         credit_link = page.locator('a:has-text("Credits")').first
         if await credit_link.count() == 0:
@@ -146,14 +140,12 @@ class TaskExecutor:
             return False
 
     async def process_photo(self, update, image_bytes):
-        # Try up to 3 proxies
         for attempt in range(3):
             proxy = None
             if not self.proxies:
                 await self._fetch_proxies()
             if self.proxies:
                 proxy_str = random.choice(self.proxies)
-                # Format: "http://ip:port"
                 proxy = {"server": f"http://{proxy_str}"}
                 logger.info(f"Using proxy: {proxy_str}")
             else:
@@ -161,14 +153,13 @@ class TaskExecutor:
 
             try:
                 await self._run_browser(update, image_bytes, proxy)
-                return  # success, exit
+                return
             except Exception as e:
                 logger.warning(f"Attempt {attempt+1} failed with proxy {proxy_str if proxy else 'none'}: {e}")
                 if proxy and proxy_str in self.proxies:
-                    self.proxies.remove(proxy_str)  # remove bad proxy
+                    self.proxies.remove(proxy_str)
                 await asyncio.sleep(2)
 
-        # If all attempts fail, run without proxy as last resort
         logger.warning("All proxy attempts failed, running without proxy.")
         await self._run_browser(update, image_bytes, None)
 
@@ -193,15 +184,34 @@ class TaskExecutor:
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
         async with async_playwright() as p:
-            launch_args = [
+            # Max stealth args
+            args = [
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
                 "--disable-web-security",
-                "--disable-dev-shm-usage"
+                "--disable-dev-shm-usage",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-extensions",
+                "--disable-sync",
+                "--disable-translate",
+                "--hide-scrollbars",
+                "--metrics-recording-only",
+                "--mute-audio",
+                "--no-first-run",
+                "--safebrowsing-disable-auto-update",
+                f"--window-size={width},{height}"
             ]
-            browser = await p.chromium.launch(headless=True, args=launch_args, proxy=proxy)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=args,
+                proxy=proxy,
+                # Use new headless mode if available
+                chromium_sandbox=False
+            )
+            # Override headless detection via context
             context = await browser.new_context(
                 user_agent=ua,
                 viewport={"width": width, "height": height},
@@ -217,20 +227,38 @@ class TaskExecutor:
             )
             page = await context.new_page()
 
+            # Comprehensive stealth init script
             await page.add_init_script("""
+                // Remove webdriver
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                // Plugins
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+                // Languages
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                // Chrome object
+                window.chrome = { runtime: {} };
+                // Device specs
                 Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
                 Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-                Object.defineProperty(window, 'chrome', { value: { runtime: {} } });
-                Object.defineProperty(navigator, 'platform', { value: 'Win32' });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+                // Screen dimensions to match viewport
+                const screenProps = { availWidth: window.innerWidth, availHeight: window.innerHeight };
+                Object.defineProperty(window.screen, 'availWidth', { get: () => screenProps.availWidth });
+                Object.defineProperty(window.screen, 'availHeight', { get: () => screenProps.availHeight });
+                // Outer dimensions
+                Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth });
+                Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight });
+                // Permissions
                 const originalQuery = window.navigator.permissions.query;
                 window.navigator.permissions.query = (parameters) => (
                     parameters.name === 'notifications' ?
                         Promise.resolve({ state: Notification.permission }) :
                         originalQuery(parameters)
                 );
+                // Connection (optional)
+                if (!navigator.connection) {
+                    Object.defineProperty(navigator, 'connection', { value: { rtt: 50, downlink: 10 } });
+                }
             """)
 
             try:
@@ -319,7 +347,6 @@ class TaskExecutor:
                 await update.message.reply_text("Insufficient credits (need 10). Please try a different fingerprint or later.")
                 await browser.close()
                 return
-
             await self._send_screenshot(update, page, "💰 Credits OK (10+)")
 
             logger.info("🔍 Looking for generate button...")

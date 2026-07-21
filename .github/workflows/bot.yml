@@ -20,32 +20,24 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install ProtonVPN and connect to random free server
+      - name: Install ProtonVPN CLI
         run: |
           sudo apt-get update
-          sudo apt-get install -y openvpn curl jq
-          
-          # Download ProtonVPN server list
-          curl -s https://api.protonvpn.ch/v1/logicals -o /tmp/servers.json
-          
-          # Filter free servers and pick one randomly
-          SERVER=$(cat /tmp/servers.json | jq -r '.LogicalServers[] | select(.Features | contains([2])) | .Servers[] | select(.Status == 1) | .EntryIP' | shuf -n 1)
-          echo "Selected server: $SERVER"
-          
-          # Download config for the selected server
-          sudo curl -o /etc/openvpn/protonvpn.ovpn "https://api.protonvpn.ch/v1/OpenVPNConfiguration?server=$SERVER&protocol=udp"
-          
-          echo "simonshichet899@gmail.com" > /tmp/auth.txt
-          echo "Shichet+123" >> /tmp/auth.txt
-          sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
-          sudo chmod 600 /etc/openvpn/auth.txt
+          sudo apt-get install -y python3-pip python3-venv openvpn
+          python3 -m pip install --user protonvpn-cli
+          export PATH="$PATH:$HOME/.local/bin"
+          # Initialize ProtonVPN
+          protonvpn-cli init --no-news
 
-      - name: Connect to ProtonVPN
+      - name: Connect to ProtonVPN (random free server)
         run: |
-          sudo openvpn --config /etc/openvpn/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
-          sleep 15
+          export PATH="$PATH:$HOME/.local/bin"
+          # Login
+          echo "simonshichet899@gmail.com" | protonvpn-cli login simonshichet899@gmail.com Shichet+123
+          # Connect to random free server
+          protonvpn-cli connect -r
+          sleep 10
           echo "✅ VPN connected"
-          echo "VPN IP:"
           curl -s https://api.ipify.org?format=json || echo "VPN connection failed"
 
       - name: Install dependencies

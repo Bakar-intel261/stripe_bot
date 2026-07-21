@@ -81,6 +81,37 @@ class TaskExecutor:
         logger.info(f"⏳ Waiting {delay} seconds...")
         await asyncio.sleep(delay)
 
+    async def _simulate_human_behavior(self, page):
+        """Scroll, move mouse, hover to mimic real user."""
+        logger.info("👤 Simulating human behavior...")
+        # Scroll down and up
+        await page.evaluate("window.scrollBy(0, 300)")
+        await asyncio.sleep(random.uniform(1, 2))
+        await page.evaluate("window.scrollBy(0, -150)")
+        await asyncio.sleep(random.uniform(1, 2))
+
+        # Random mouse movements
+        for _ in range(3):
+            x = random.randint(100, 1800)
+            y = random.randint(100, 900)
+            await page.mouse.move(x, y)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+        # Hover over some elements (e.g., styles or templates)
+        try:
+            style_item = page.locator('div.sf-image-to-image__style__item').first
+            if await style_item.count() > 0:
+                await style_item.hover()
+                await asyncio.sleep(1)
+        except:
+            pass
+
+        # Scroll to bottom and back
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await asyncio.sleep(1.5)
+        await page.evaluate("window.scrollTo(0, 0)")
+        await asyncio.sleep(1)
+
     async def _refresh_credits_proactively(self, update, page):
         logger.info("🪙 Attempting to trigger free credits...")
         credit_link = page.locator('a:has-text("Credits")').first
@@ -184,7 +215,6 @@ class TaskExecutor:
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
         async with async_playwright() as p:
-            # Max stealth args
             args = [
                 "--no-sandbox",
                 "--disable-gpu",
@@ -208,10 +238,8 @@ class TaskExecutor:
                 headless=True,
                 args=args,
                 proxy=proxy,
-                # Use new headless mode if available
                 chromium_sandbox=False
             )
-            # Override headless detection via context
             context = await browser.new_context(
                 user_agent=ua,
                 viewport={"width": width, "height": height},
@@ -227,35 +255,25 @@ class TaskExecutor:
             )
             page = await context.new_page()
 
-            # Comprehensive stealth init script
             await page.add_init_script("""
-                // Remove webdriver
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                // Plugins
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-                // Languages
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                // Chrome object
                 window.chrome = { runtime: {} };
-                // Device specs
                 Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
                 Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
                 Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-                // Screen dimensions to match viewport
                 const screenProps = { availWidth: window.innerWidth, availHeight: window.innerHeight };
                 Object.defineProperty(window.screen, 'availWidth', { get: () => screenProps.availWidth });
                 Object.defineProperty(window.screen, 'availHeight', { get: () => screenProps.availHeight });
-                // Outer dimensions
                 Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth });
                 Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight });
-                // Permissions
                 const originalQuery = window.navigator.permissions.query;
                 window.navigator.permissions.query = (parameters) => (
                     parameters.name === 'notifications' ?
                         Promise.resolve({ state: Notification.permission }) :
                         originalQuery(parameters)
                 );
-                // Connection (optional)
                 if (!navigator.connection) {
                     Object.defineProperty(navigator, 'connection', { value: { rtt: 50, downlink: 10 } });
                 }
@@ -274,6 +292,9 @@ class TaskExecutor:
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
             await self._human_wait(5, 7)
             await self._send_screenshot(update, page, "🌐 Landing page")
+
+            # ---- Human behavior simulation before age gate ----
+            await self._simulate_human_behavior(page)
 
             logger.info("⏳ Waiting 10 seconds before clicking age verification...")
             await asyncio.sleep(10)

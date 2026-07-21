@@ -126,7 +126,6 @@ class TaskExecutor:
         timezone = getattr(fp, 'timezone', 'America/New_York')
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
-        # No proxy – VPN is used at system level
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 channel="chrome",

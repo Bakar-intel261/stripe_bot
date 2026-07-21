@@ -6,7 +6,6 @@ import random
 from io import BytesIO
 from PIL import Image
 from playwright.async_api import async_playwright
-from playwright_with_fingerprints import FingerprintSwitcher
 from chrome_fingerprints import FingerprintGenerator
 
 logger = logging.getLogger(__name__)
@@ -119,35 +118,45 @@ class TaskExecutor:
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
-        # Get a fresh fingerprint from the database
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        width, height = 1920, 1080
-        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
+        # Get screen resolution
+        if hasattr(fp, 'screen_resolution'):
+            width = getattr(fp.screen_resolution, 'width', 1920)
+            height = getattr(fp.screen_resolution, 'height', 1080)
+        elif hasattr(fp, 'screen'):
+            if isinstance(fp.screen, dict):
+                width = fp.screen.get('width', 1920)
+                height = fp.screen.get('height', 1080)
+            else:
+                width = getattr(fp.screen, 'width', 1920)
+                height = getattr(fp.screen, 'height', 1080)
+        else:
+            width, height = 1920, 1080
+        locale = getattr(fp, 'locale', 'en-US')
+        timezone = getattr(fp, 'timezone', 'America/New_York')
+        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
-        # Use FingerprintSwitcher to launch a stealthy browser
-        async with FingerprintSwitcher() as fs:
-            # The plugin applies the fingerprint automatically
-            browser = await fs.launch(
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
                 headless=True,
-                fingerprint=fp,  # pass the fingerprint object
                 args=[
                     "--no-sandbox",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-web-security",
                     "--disable-dev-shm-usage"
                 ]
             )
-            # The plugin also handles context creation with fingerprint attributes,
-            # but we can also manually create context for more control.
             context = await browser.new_context(
                 user_agent=ua,
                 viewport={"width": width, "height": height},
-                locale=getattr(fp, 'locale', 'en-US'),
-                timezone_id=getattr(fp, 'timezone', 'America/New_York'),
+                locale=locale,
+                timezone_id=timezone,
                 device_scale_factor=1,
                 extra_http_headers={
-                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Language': f"{locale},en;q=0.9",
                     'Accept-Encoding': 'gzip, deflate, br',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                     'Cache-Control': 'max-age=0',
@@ -155,7 +164,6 @@ class TaskExecutor:
             )
             page = await context.new_page()
 
-            # Additional stealth patches (the plugin already does most, but these are safe)
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -172,7 +180,6 @@ class TaskExecutor:
                 );
             """)
 
-            # Try to apply playwright-stealth as well (if available)
             try:
                 from playwright_stealth import stealth_async
                 await stealth_async(page)

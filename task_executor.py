@@ -50,22 +50,31 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
-        """Click Credits link → pricing → back."""
-        logger.info("🪙 Refreshing credits via Credits link...")
+        """Simulate human browsing to trigger free credits: click Credits, go back, then go home and back."""
+        logger.info("🪙 Attempting to trigger free credits...")
+        # Step 1: Click Credits link
         credit_link = page.locator('a:has-text("Credits")').first
         if await credit_link.count() == 0:
             credit_link = page.locator('button:has-text("Credits")').first
         if await credit_link.count() == 0:
             logger.warning("⚠️ Credits link not found")
-            return False
+        else:
+            await credit_link.click()
+            await self._human_wait(3, 5)
+            await self._send_screenshot(update, page, "🪙 Credits page")
+            await page.go_back()
+            await self._human_wait(3, 5)
+            await self._send_screenshot(update, page, "🔙 Back after Credits")
 
-        await credit_link.click()
-        await self._human_wait(3, 5)
-        await self._send_screenshot(update, page, "🪙 Credits page")
-        await self._human_wait(2, 4)
-        await page.go_back()
-        await self._human_wait(3, 6)
-        await self._send_screenshot(update, page, "🔙 Back after refresh")
+        # Step 2: Navigate to homepage and back
+        logger.info("🏠 Navigating to homepage and back...")
+        current_url = page.url
+        await page.goto("https://www.swapfaces.ai")
+        await self._human_wait(4, 6)
+        await self._send_screenshot(update, page, "🏠 Homepage")
+        await page.goto(current_url)
+        await self._human_wait(6, 10)  # longer wait for credits to load
+        await self._send_screenshot(update, page, "🔙 Back after homepage")
         return True
 
     async def _get_credits(self, page):
@@ -92,7 +101,8 @@ class TaskExecutor:
         logger.warning("Could not find credit balance")
         return None
 
-    async def _ensure_credits(self, page, update, refresh_if_needed=True):
+    async def _ensure_credits(self, page, update):
+        """Check credits; if 0, abort. We already did refresh before."""
         credits = await self._get_credits(page)
         if credits is None:
             logger.warning("Could not read credits. Assuming 0.")
@@ -100,18 +110,6 @@ class TaskExecutor:
         if credits >= 10:
             logger.info(f"✅ Sufficient credits: {credits}")
             return True
-
-        if refresh_if_needed:
-            logger.warning(f"⚠️ Insufficient credits: {credits}. Attempting refresh...")
-            await self._refresh_credits_proactively(update, page)
-            await self._human_wait(3, 5)
-            credits = await self._get_credits(page)
-            if credits is not None and credits >= 10:
-                logger.info(f"✅ Credits refreshed to {credits}")
-                return True
-            else:
-                logger.warning(f"Still insufficient: {credits}. Aborting.")
-                return False
         else:
             logger.warning(f"Insufficient credits: {credits}. Aborting.")
             return False
@@ -205,7 +203,7 @@ class TaskExecutor:
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Step 3: Proactive Credit Refresh ----
+            # ---- Step 3: Proactive Credit Refresh (human simulation) ----
             await self._refresh_credits_proactively(update, page)
 
             # ---- Step 4: Upload ----
@@ -263,7 +261,7 @@ class TaskExecutor:
 
             # ---- Step 7: Credit check before generate ----
             logger.info("💰 Checking credits before generate...")
-            if not await self._ensure_credits(page, update, refresh_if_needed=True):
+            if not await self._ensure_credits(page, update):
                 logger.error("Insufficient credits after refresh, aborting")
                 await self._send_screenshot(update, page, "⛔ Not enough credits")
                 await update.message.reply_text("Insufficient credits (need 10). Please try a different fingerprint or later.")

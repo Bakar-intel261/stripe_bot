@@ -15,6 +15,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Connect to ProtonVPN
+        uses: golfzaptw/action-connect-ovpn@v1
+        with:
+          ovpn_file: https://raw.githubusercontent.com/ProtonVPN/protonvpn-openvpn/master/ProtonVPN_OpenVPN_Free_US.ovpn
+          username: TKns6zrWuLiQxg9K
+          password: Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
+
+      - name: Verify VPN connection
+        run: |
+          echo "🖥️ Current IP:"
+          curl -s https://api.ipify.org
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

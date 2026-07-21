@@ -3,10 +3,11 @@ import base64
 import asyncio
 import re
 import random
-from playwright.async_api import async_playwright
-from chrome_fingerprints import FingerprintGenerator
 from io import BytesIO
 from PIL import Image
+from playwright.async_api import async_playwright
+from playwright_with_fingerprints import FingerprintSwitcher
+from chrome_fingerprints import FingerprintGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,6 @@ class TaskExecutor:
 
     async def _get_credits(self, page):
         """Extract the actual credit balance (not the cost)."""
-        # Look for the coin icon and its parent
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
             parent = coin.locator('..')
@@ -83,7 +83,6 @@ class TaskExecutor:
                     logger.info(f"Balance from coin parent: {balance}")
                     return balance
 
-        # Fallback: search for "Credits" followed by a number
         page_text = await page.content()
         match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
         if match:
@@ -95,7 +94,6 @@ class TaskExecutor:
         return None
 
     async def _ensure_credits(self, page, update, refresh_if_needed=True):
-        """Check credits; if 0, optionally refresh and re-check."""
         credits = await self._get_credits(page)
         if credits is None:
             logger.warning("Could not read credits. Assuming 0.")
@@ -121,38 +119,60 @@ class TaskExecutor:
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
+        # Get a fresh fingerprint from the database
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         width, height = 1920, 1080
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
+        # Use FingerprintSwitcher to launch a stealthy browser
+        async with FingerprintSwitcher() as fs:
+            # The plugin applies the fingerprint automatically
+            browser = await fs.launch(
                 headless=True,
+                fingerprint=fp,  # pass the fingerprint object
                 args=[
                     "--no-sandbox",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
-                    "--disable-web-security",
                     "--disable-dev-shm-usage"
                 ]
             )
+            # The plugin also handles context creation with fingerprint attributes,
+            # but we can also manually create context for more control.
             context = await browser.new_context(
                 user_agent=ua,
                 viewport={"width": width, "height": height},
                 locale=getattr(fp, 'locale', 'en-US'),
                 timezone_id=getattr(fp, 'timezone', 'America/New_York'),
-                device_scale_factor=1
+                device_scale_factor=1,
+                extra_http_headers={
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Cache-Control': 'max-age=0',
+                }
             )
             page = await context.new_page()
 
+            # Additional stealth patches (the plugin already does most, but these are safe)
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                Object.defineProperty(window, 'chrome', { value: { runtime: {} } });
+                Object.defineProperty(navigator, 'platform', { value: 'Win32' });
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
             """)
 
+            # Try to apply playwright-stealth as well (if available)
             try:
                 from playwright_stealth import stealth_async
                 await stealth_async(page)

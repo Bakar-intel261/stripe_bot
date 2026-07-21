@@ -159,14 +159,11 @@ class TaskExecutor:
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                executable_path="/usr/bin/chromium-browser",
                 headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
-                    "--disable-features=IsolateOrigins,site-per-process",
-                    "--disable-web-security",
                     "--disable-dev-shm-usage"
                 ]
             )
@@ -175,13 +172,7 @@ class TaskExecutor:
                 viewport={"width": width, "height": height},
                 locale=locale,
                 timezone_id=timezone,
-                device_scale_factor=1,
-                extra_http_headers={
-                    'Accept-Language': f"{locale},en;q=0.9",
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Cache-Control': 'max-age=0',
-                }
+                device_scale_factor=1
             )
             page = await context.new_page()
 
@@ -193,12 +184,6 @@ class TaskExecutor:
                 Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
                 Object.defineProperty(window, 'chrome', { value: { runtime: {} } });
                 Object.defineProperty(navigator, 'platform', { value: 'Win32' });
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
-                );
             """)
 
             try:
@@ -304,29 +289,129 @@ class TaskExecutor:
             await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
+            # ================================================================
+            # DEBUG: DUMP ALL IMAGES ON THE PAGE
+            # ================================================================
+            logger.info("📸 Debug: Dumping all images on page...")
+            images = await page.locator('img').all()
+            logger.info(f"Found {len(images)} images on page")
+            for idx, img in enumerate(images):
+                src = await img.get_attribute('src') or 'no-src'
+                cls = await img.get_attribute('class') or 'no-class'
+                box = await img.bounding_box()
+                size = f"{box['width']}x{box['height']}" if box else 'hidden'
+                logger.info(f"Image {idx}: src={src[:50]}..., class={cls}, size={size}")
+
+            # ================================================================
+            # IMPROVED RESULT IMAGE DETECTION
+            # ================================================================
             logger.info("⏳ Waiting for result image (max 60s)...")
+            
             result_img = None
             start_time = asyncio.get_event_loop().time()
-            for i in range(60):
+            timeout = 60
+            
+            while (asyncio.get_event_loop().time() - start_time) < timeout:
                 elapsed = int(asyncio.get_event_loop().time() - start_time)
-                images = await page.locator('img[src^="data:image"], img[class*="result"], img[class*="output"], img[class*="generated"]').all()
+                
+                # Get all images
+                images = await page.locator('img').all()
+                
                 for img in images:
+                    src = await img.get_attribute('src') or ''
+                    cls = await img.get_attribute('class') or ''
                     box = await img.bounding_box()
-                    if box and box['width'] > 0 and box['height'] > 0:
+                    
+                    # Check if it's a valid image
+                    if not box or box['width'] < 10 or box['height'] < 10:
+                        continue
+                    
+                    # Strategy 1: Data URL (most common for generated images)
+                    if src.startswith('data:image'):
                         result_img = img
+                        logger.info(f"✅ Result found: data:image (elapsed {elapsed}s)")
                         break
+                    
+                    # Strategy 2: Specific classes
+                    if 'result' in cls.lower() or 'output' in cls.lower() or 'generated' in cls.lower():
+                        result_img = img
+                        logger.info(f"✅ Result found: class '{cls}' (elapsed {elapsed}s)")
+                        break
+                
                 if result_img:
                     break
+                
+                # Check canvas elements
+                canvases = await page.locator('canvas').all()
+                for canvas in canvases:
+                    box = await canvas.bounding_box()
+                    if box and box['width'] > 50 and box['height'] > 50:
+                        try:
+                            data_url = await page.evaluate('(canvas) => canvas.toDataURL("image/png")', canvas)
+                            if data_url and data_url.startswith('data:image'):
+                                logger.info(f"✅ Found result on canvas (elapsed {elapsed}s)")
+                                screenshot_bytes = await page.screenshot(clip={"x": box['x'], "y": box['y'], "width": box['width'], "height": box['height']})
+                                await browser.close()
+                                return {
+                                    "status": "success",
+                                    "image": base64.b64encode(screenshot_bytes).decode(),
+                                    "method": "canvas",
+                                    "size": len(screenshot_bytes)
+                                }
+                        except:
+                            pass
+                
                 await asyncio.sleep(1)
-
-            await self._human_wait(2, 4)
+            
+            # If we found a result image, download it
             if result_img:
-                caption = f"✅ Final result (generated at {elapsed}s)"
-            else:
-                page_text = await page.content()
-                if "credit" in page_text.lower() or "not enough" in page_text.lower():
-                    caption = "⚠️ Credit/error detected – result may not be generated"
-                else:
-                    caption = "⏱️ Timeout – no result after 60s"
-            await self._send_screenshot(update, page, caption)
+                src = await result_img.get_attribute('src')
+                if src and src.startswith('data:image'):
+                    match = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', src)
+                    if match:
+                        image_data = base64.b64decode(match.group(2))
+                        await browser.close()
+                        return {
+                            "status": "success",
+                            "image": base64.b64encode(image_data).decode(),
+                            "method": "data_url",
+                            "size": len(image_data)
+                        }
+                elif src and src.startswith('blob:'):
+                    try:
+                        js_code = """
+                            async (url) => {
+                                const response = await fetch(url);
+                                const blob = await response.blob();
+                                return new Promise((resolve) => {
+                                    const reader = new FileReader();
+                                    reader.onloadend = () => resolve(reader.result);
+                                    reader.readAsDataURL(blob);
+                                });
+                            }
+                        """
+                        data_url = await page.evaluate(js_code, src)
+                        if data_url and data_url.startswith('data:image'):
+                            match = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', data_url)
+                            if match:
+                                image_data = base64.b64decode(match.group(2))
+                                await browser.close()
+                                return {
+                                    "status": "success",
+                                    "image": base64.b64encode(image_data).decode(),
+                                    "method": "blob",
+                                    "size": len(image_data)
+                                }
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch blob URL: {e}")
+            
+            # Fallback: take a full page screenshot
+            logger.warning("ℹ️ No result image found, taking full-page screenshot as fallback")
+            screenshot_bytes = await page.screenshot(full_page=True)
             await browser.close()
+            return {
+                "status": "success",
+                "image": base64.b64encode(screenshot_bytes).decode(),
+                "method": "screenshot_fallback",
+                "size": len(screenshot_bytes)
+            }

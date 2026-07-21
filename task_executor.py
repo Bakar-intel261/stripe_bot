@@ -52,7 +52,6 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
-        """Click Credits link, wait, then go back to generation page."""
         logger.info("🪙 Clicking Credits link...")
         credit_link = page.locator('a:has-text("Credits")').first
         if await credit_link.count() == 0:
@@ -65,7 +64,6 @@ class TaskExecutor:
         await self._human_wait(3, 5)
         await self._send_screenshot(update, page, "🪙 Credits page")
 
-        # Go back to generation page
         logger.info("🔙 Going back to generation page...")
         await page.go_back()
         await self._human_wait(3, 5)
@@ -73,7 +71,6 @@ class TaskExecutor:
         return True
 
     async def _get_credits(self, page):
-        """Extract the actual credit balance."""
         selectors = [
             'span[class*="credit"]',
             'div[class*="credit"]',
@@ -162,7 +159,7 @@ class TaskExecutor:
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                channel="chrome",
+                executable_path="/usr/bin/chromium-browser",
                 headless=True,
                 args=[
                     "--no-sandbox",

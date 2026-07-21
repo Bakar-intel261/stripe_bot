@@ -25,19 +25,19 @@ jobs:
           echo "📦 Installing ProtonVPN CLI..."
           sudo apt-get update
           sudo apt-get install -y openvpn jq
-          python3 -m pip install --user protonvpn-cli
+          sudo python3 -m pip install protonvpn-cli
           echo "✅ ProtonVPN CLI installed"
 
       - name: Connect to ProtonVPN (random free server)
         run: |
           echo "🔑 Initializing ProtonVPN..."
-          python3 -m protonvpn_cli init
+          sudo protonvpn init
           
           echo "🔐 Logging in..."
-          python3 -m protonvpn_cli login simonshichet899@gmail.com Shichet+123
+          sudo protonvpn login simonshichet899@gmail.com Shichet+123
           
           echo "🌐 Connecting to random free server..."
-          python3 -m protonvpn_cli connect -r
+          sudo protonvpn connect -r
           sleep 15
           
           echo "✅ VPN connected"

@@ -22,33 +22,47 @@ jobs:
 
       - name: Install ProtonVPN CLI
         run: |
+          echo "📦 Installing ProtonVPN CLI..."
           sudo apt-get update
           sudo apt-get install -y openvpn
           python3 -m pip install --user protonvpn-cli
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "✅ ProtonVPN CLI installed"
 
       - name: Connect to ProtonVPN (random free server)
         run: |
           export PATH="$PATH:$HOME/.local/bin"
-          # Initialize ProtonVPN
+          echo "🔑 Initializing ProtonVPN..."
           protonvpn-cli init --no-news
-          # Login
+          
+          echo "🔐 Logging in..."
           protonvpn-cli login simonshichet899@gmail.com Shichet+123
-          # Connect to random free server
+          
+          echo "🌐 Connecting to random free server..."
           protonvpn-cli connect -r
           sleep 10
+          
           echo "✅ VPN connected"
-          echo "VPN IP:"
-          curl -s https://api.ipify.org?format=json || echo "VPN connection failed"
+          echo "🖥️ Checking IP address..."
+          IP=$(curl -s https://api.ipify.org?format=json | jq -r '.ip' 2>/dev/null || echo "Failed to get IP")
+          echo "🖥️ Current IP: $IP"
+          
+          # Additional IP check
+          echo "📡 IP Info:"
+          curl -s https://ipinfo.io || echo "IP info failed"
 
       - name: Install dependencies
         run: |
+          echo "📦 Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           playwright install chrome
+          echo "✅ Dependencies installed"
 
       - name: Run bot
-        run: python bot.py
+        run: |
+          echo "🤖 Starting bot..."
+          python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
 

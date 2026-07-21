@@ -25,24 +25,50 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openvpn curl jq
 
-      - name: Download ProtonVPN config
+      - name: Setup ProtonVPN config and credentials
         run: |
-          # Get a free US server config directly from ProtonVPN
-          curl -o /tmp/protonvpn.ovpn "https://raw.githubusercontent.com/ProtonVPN/protonvpn-openvpn/master/ProtonVPN_OpenVPN_Free_US.ovpn"
+          # Create working config file (US Free Server)
+          sudo bash -c 'cat > /etc/openvpn/protonvpn.ovpn << "EOL"
+client
+dev tun
+proto udp
+remote us-01.protonvpn.com 1194
+remote us-02.protonvpn.com 1194
+remote us-03.protonvpn.com 1194
+remote us-04.protonvpn.com 1194
+remote us-05.protonvpn.com 1194
+remote us-06.protonvpn.com 1194
+remote us-07.protonvpn.com 1194
+remote us-08.protonvpn.com 1194
+remote us-09.protonvpn.com 1194
+remote us-10.protonvpn.com 1194
+remote us-11.protonvpn.com 1194
+remote us-12.protonvpn.com 1194
+remote us-13.protonvpn.com 1194
+remote us-14.protonvpn.com 1194
+remote us-15.protonvpn.com 1194
+remote us-16.protonvpn.com 1194
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+remote-cert-tls server
+verify-x509-name ProtonVPN_Free_US name
+auth-user-pass /etc/openvpn/auth.txt
+comp-lzo
+verb 3
+EOL'
 
-      - name: Setup OpenVPN credentials
-        run: |
-          # Use OpenVPN credentials (not Proton Account credentials)
-          echo "TKns6zrWuLiQxg9K" > /tmp/auth.txt
-          echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /tmp/auth.txt
-          sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
+          # Add credentials
+          sudo bash -c 'echo "TKns6zrWuLiQxg9K" > /etc/openvpn/auth.txt'
+          sudo bash -c 'echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /etc/openvpn/auth.txt'
           sudo chmod 600 /etc/openvpn/auth.txt
 
       - name: Connect to ProtonVPN
         run: |
           echo "🌐 Connecting to ProtonVPN..."
-          sudo openvpn --config /tmp/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
-          sleep 15
+          sudo openvpn --config /etc/openvpn/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
+          sleep 20
           echo "✅ VPN connected"
           echo "🖥️ Checking IP address..."
           IP=$(curl -s https://api.ipify.org?format=json | jq -r '.ip' 2>/dev/null || echo "Failed to get IP")

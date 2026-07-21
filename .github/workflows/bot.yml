@@ -30,7 +30,7 @@ jobs:
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          PROXY_URL: ${{ secrets.PROXY_URL }}
+          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
 
       - name: Commit updated used_fingerprints.json (if any)
         run: |

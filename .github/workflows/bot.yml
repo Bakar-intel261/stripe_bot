@@ -30,11 +30,11 @@ jobs:
 
       - name: Connect to ProtonVPN (random free server)
         run: |
-          echo "🔑 Initializing ProtonVPN..."
-          sudo protonvpn init
+          echo "🔑 Initializing ProtonVPN with OpenVPN credentials..."
+          sudo protonvpn init --username TKns6zrWuLiQxg9K --password Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
           
           echo "🔐 Logging in..."
-          sudo protonvpn login simonshichet899@gmail.com Shichet+123
+          sudo protonvpn login TKns6zrWuLiQxg9K Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
           
           echo "🌐 Connecting to random free server..."
           sudo protonvpn connect -r

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
-        logger.info("🚀 VPN COMPATIBLE VERSION DEPLOYED")
+        logger.info("🚀 FAST AUTO-TERMINATE VERSION")
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
@@ -46,9 +46,9 @@ class TaskExecutor:
             logger.error(f"❌ Error clicking {description}: {e}")
             return False
 
-    async def _human_wait(self, min_sec=5, max_sec=10):
+    async def _human_wait(self, min_sec=2, max_sec=3):  # FASTER
         delay = random.randint(min_sec, max_sec)
-        logger.info(f"⏳ Waiting {delay} seconds...")
+        logger.info(f"⏳ Waiting {delay}s...")
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
@@ -61,12 +61,10 @@ class TaskExecutor:
             return False
 
         await credit_link.click()
-        await self._human_wait(3, 5)
+        await self._human_wait(2, 3)
         await self._send_screenshot(update, page, "🪙 Credits page")
-
-        logger.info("🔙 Going back to generation page...")
         await page.go_back()
-        await self._human_wait(3, 5)
+        await self._human_wait(2, 3)
         await self._send_screenshot(update, page, "🔙 Back to generation page")
         return True
 
@@ -125,7 +123,7 @@ class TaskExecutor:
         if refresh_if_needed:
             logger.warning(f"⚠️ Insufficient credits: {credits}. Attempting refresh...")
             await self._refresh_credits_proactively(update, page)
-            await self._human_wait(3, 5)
+            await self._human_wait(2, 3)
             credits = await self._get_credits(page)
             if credits is not None and credits >= 10:
                 logger.info(f"✅ Credits refreshed to {credits}")
@@ -137,6 +135,47 @@ class TaskExecutor:
             logger.warning(f"Insufficient credits: {credits}. Aborting.")
             return False
 
+    async def _find_download_button(self, page):
+        """Find and click the download button to get the generated image."""
+        logger.info("🔍 Looking for download button...")
+        
+        # Strategy 1: Look for a[download]
+        download_links = await page.locator('a[download]').all()
+        if download_links:
+            logger.info(f"✅ Found {len(download_links)} download links")
+            for link in download_links:
+                href = await link.get_attribute('href')
+                if href:
+                    logger.info(f"Download link href: {href[:100]}...")
+                    return link
+        
+        # Strategy 2: Look for buttons with download icon
+        download_buttons = await page.locator('button[aria-label*="download" i], button[title*="download" i]').all()
+        if download_buttons:
+            logger.info(f"✅ Found {len(download_buttons)} download buttons")
+            return download_buttons[0]
+        
+        # Strategy 3: Look for any button with download text
+        download_buttons = await page.locator('button:has-text("Download"), div[role="button"]:has-text("Download")').all()
+        if download_buttons:
+            logger.info(f"✅ Found {len(download_buttons)} buttons with 'Download' text")
+            return download_buttons[0]
+        
+        # Strategy 4: Look for SVG with arrow-down icon (common download icon)
+        svg_buttons = await page.locator('button:has(svg[class*="download"]), button:has(svg[class*="arrow-down"]), div[role="button"]:has(svg[class*="download"])').all()
+        if svg_buttons:
+            logger.info(f"✅ Found {len(svg_buttons)} buttons with download SVG icon")
+            return svg_buttons[0]
+        
+        # Strategy 5: Look for img with download icon
+        img_buttons = await page.locator('button:has(img[alt*="download" i]), button:has(img[src*="download" i])').all()
+        if img_buttons:
+            logger.info(f"✅ Found {len(img_buttons)} buttons with download image")
+            return img_buttons[0]
+        
+        logger.warning("❌ No download button found")
+        return None
+
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
@@ -144,28 +183,16 @@ class TaskExecutor:
         if hasattr(fp, 'screen_resolution'):
             width = getattr(fp.screen_resolution, 'width', 1920)
             height = getattr(fp.screen_resolution, 'height', 1080)
-        elif hasattr(fp, 'screen'):
-            if isinstance(fp.screen, dict):
-                width = fp.screen.get('width', 1920)
-                height = fp.screen.get('height', 1080)
-            else:
-                width = getattr(fp.screen, 'width', 1920)
-                height = getattr(fp.screen, 'height', 1080)
         else:
             width, height = 1920, 1080
         locale = getattr(fp, 'locale', 'en-US')
         timezone = getattr(fp, 'timezone', 'America/New_York')
-        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
+        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-gpu",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage"
-                ]
+                args=["--no-sandbox", "--disable-gpu", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"]
             )
             context = await browser.new_context(
                 user_agent=ua,
@@ -195,29 +222,26 @@ class TaskExecutor:
 
             logger.info("===== Starting process =====")
 
+            # === NAVIGATE ===
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
-
-            try:
-                ip = await page.evaluate("() => fetch('https://api.ipify.org?format=json').then(r => r.json()).then(data => data.ip)")
-                logger.info(f"🖥️ Current IP: {ip}")
-            except:
-                logger.warning("Could not fetch IP")
-
-            await self._human_wait(3, 6)
+            await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
+            # === AGE VERIFICATION ===
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
-                logger.info("✅ Age verification found, clicking via coordinates...")
+                logger.info("✅ Age verification found, clicking...")
                 await self._click_element_center(page, age_btn, "Age verification button")
-                await self._human_wait(3, 5)
+                await self._human_wait(2, 3)
                 await self._send_screenshot(update, page, "✅ Age verification accepted")
             else:
                 logger.info("ℹ️ No age verification needed")
 
+            # === REFRESH CREDITS ===
             await self._refresh_credits_proactively(update, page)
 
+            # === UPLOAD ===
             logger.info("🔍 Looking for upload area...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
@@ -229,28 +253,23 @@ class TaskExecutor:
                     await upload_btn.click()
                 file_chooser = await fc_info.value
                 await file_chooser.set_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
-                logger.info("📤 Image uploaded via file chooser")
+                logger.info("📤 Image uploaded")
             except Exception as e:
-                logger.warning(f"File chooser failed: {e}, using direct input fallback")
                 file_input = page.locator('input[type="file"]').first
                 if await file_input.count() == 0:
                     raise Exception("No file input found")
                 await file_input.set_input_files(files=[{"name": "image.jpg", "mimeType": "image/jpeg", "buffer": image_bytes}])
                 logger.info("📤 Image uploaded via direct input")
 
-            await self._human_wait(2, 4)
+            await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "📤 After upload")
 
+            # === CONSENT POPUP ===
             logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
                 await consent_card.wait_for(state="visible", timeout=8000)
                 logger.info("✅ Consent popup card is VISIBLE")
-            except:
-                logger.warning("⚠️ Consent popup card did NOT appear")
-                await self._send_screenshot(update, page, "📸 No consent popup")
-
-            if await consent_card.count() > 0 and await consent_card.is_visible():
                 consent_block = consent_card.locator('div.mi-upload-consent__consent').first
                 if await consent_block.count() > 0:
                     await self._click_element_center(page, consent_block, "Consent block")
@@ -258,9 +277,12 @@ class TaskExecutor:
                 agree_btn = consent_card.locator('button:has-text("Agree & continue")').first
                 if await agree_btn.count() > 0:
                     await self._click_element_center(page, agree_btn, "Agree & continue button")
-                    await self._human_wait(3, 5)
+                    await self._human_wait(2, 3)
                 await self._send_screenshot(update, page, "✅ Consent popup dismissed")
+            except:
+                logger.warning("⚠️ Consent popup card did NOT appear")
 
+            # === ENTER PROMPT ===
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
@@ -268,90 +290,113 @@ class TaskExecutor:
                 await self._human_wait(1, 2)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
+            # === CHECK CREDITS ===
             logger.info("💰 Checking credits before generate...")
             if not await self._ensure_credits(page, update, refresh_if_needed=True):
-                logger.error("Insufficient credits after refresh, aborting")
+                logger.error("Insufficient credits, aborting")
                 await self._send_screenshot(update, page, "⛔ Not enough credits")
                 await update.message.reply_text("Insufficient credits (need 10). Please try a different fingerprint or later.")
                 await browser.close()
                 return
-            await self._send_screenshot(update, page, "💰 Credits OK (10+)")
 
+            # === CLICK GENERATE ===
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
             if await generate_btn.get_attribute('disabled'):
-                logger.warning("⚠️ Generate button is disabled, aborting")
-                await self._send_screenshot(update, page, "⛔ Generate disabled")
+                logger.warning("⚠️ Generate button is disabled")
                 await browser.close()
                 return
             await self._click_element_center(page, generate_btn, "Generate button")
             await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
-            # ================================================================
-            # WAIT FOR GENERATION AND FIND DOWNLOAD BUTTON
-            # ================================================================
-            logger.info("⏳ Waiting 30 seconds for generation...")
-            await asyncio.sleep(30)
-
-            # === DEBUG: Find all download-related elements ===
-            logger.info("🔍 Looking for download button...")
-
-            # Try common download selectors
-            download_selectors = [
-                'a[download]',
-                'a[href*="download"]',
-                'button[aria-label*="Download" i]',
-                'button[title*="Download" i]',
-                'div[aria-label*="Download" i]',
-                'div[title*="Download" i]',
-                'img[alt*="download" i]',
-                'svg[aria-label*="download" i]',
-                'a[href$=".png"]',
-                'a[href$=".jpg"]',
-                'a[href$=".jpeg"]',
-                'a[href$=".webp"]',
-            ]
-
-            for sel in download_selectors:
-                elements = await page.locator(sel).all()
-                if elements:
-                    logger.info(f"Found {len(elements)} elements with selector: {sel}")
-                    for idx, el in enumerate(elements):
+            # === WAIT FOR RESULT & CLICK DOWNLOAD ===
+            logger.info("⏳ Waiting for generation to complete...")
+            
+            # Wait for any image to appear (data URL or result class)
+            result_found = False
+            download_btn = None
+            start_time = asyncio.get_event_loop().time()
+            timeout = 30  # max 30 seconds
+            
+            while (asyncio.get_event_loop().time() - start_time) < timeout:
+                elapsed = int(asyncio.get_event_loop().time() - start_time)
+                logger.info(f"⏳ Checking for result... ({elapsed}s)")
+                
+                # Try to find the download button
+                download_btn = await self._find_download_button(page)
+                if download_btn:
+                    logger.info("✅ Download button found!")
+                    result_found = True
+                    break
+                
+                # Also check for any new image (data URL)
+                images = await page.locator('img[src^="data:image"]').all()
+                if images:
+                    logger.info(f"✅ Found {len(images)} data images")
+                    # Try to get the image directly
+                    for img in images:
+                        box = await img.bounding_box()
+                        if box and box['width'] > 50 and box['height'] > 50:
+                            src = await img.get_attribute('src')
+                            if src and src.startswith('data:image'):
+                                logger.info("✅ Found data image, extracting...")
+                                match = re.match(r'data:image/([a-zA-Z]+);base64,([A-Za-z0-9+/=]+)', src)
+                                if match:
+                                    image_data = base64.b64decode(match.group(2))
+                                    await browser.close()
+                                    return {
+                                        "status": "success",
+                                        "image": base64.b64encode(image_data).decode(),
+                                        "method": "data_image",
+                                        "size": len(image_data)
+                                    }
+                    # If we found images but no download button, try clicking one
+                    if not download_btn:
                         try:
-                            html = await el.evaluate('el => el.outerHTML')
-                            logger.info(f"Element {idx}: {html[:200]}...")
+                            await images[0].click()
+                            logger.info("🖱️ Clicked on result image to trigger download")
+                            await asyncio.sleep(2)
+                            download_btn = await self._find_download_button(page)
+                            if download_btn:
+                                result_found = True
+                                break
                         except:
                             pass
-
-            # Also try to find any button with an SVG or image inside
-            logger.info("🔍 Looking for buttons with icons/images inside...")
-            buttons_with_icons = await page.locator('button:has(img), button:has(svg), div[role="button"]:has(img), div[role="button"]:has(svg)').all()
-            logger.info(f"Found {len(buttons_with_icons)} buttons with icons")
-
-            # Clickable elements near the generated image
-            # Try to find any clickable element that appears after generation
-            all_buttons = await page.locator('button').all()
-            logger.info(f"Found {len(all_buttons)} total buttons on page")
-            for idx, btn in enumerate(all_buttons):
+                
+                await asyncio.sleep(1)
+            
+            # If we found a download button, click it and download
+            if download_btn:
+                logger.info("🔄 Clicking download button...")
+                await download_btn.click()
+                await asyncio.sleep(2)
+                
+                # Get the downloaded content using page.expect_download
                 try:
-                    text = await btn.text_content() or ""
-                    if text.strip():
-                        logger.info(f"Button {idx}: text='{text.strip()[:50]}'")
-                except:
-                    pass
-
-            # ================================================================
-            # FALLBACK: Take full-page screenshot if no download button found
-            # ================================================================
+                    async with page.expect_download(timeout=10000) as download_info:
+                        await download_btn.click()
+                    download = await download_info.value
+                    downloaded_bytes = await download.read()
+                    logger.info(f"✅ Downloaded image: {download.suggested_filename}, size: {len(downloaded_bytes)} bytes")
+                    await browser.close()
+                    return {
+                        "status": "success",
+                        "image": base64.b64encode(downloaded_bytes).decode(),
+                        "method": "download",
+                        "size": len(downloaded_bytes)
+                    }
+                except Exception as e:
+                    logger.warning(f"Download failed: {e}")
+            
+            # === FALLBACK: Take screenshot ===
+            logger.warning("ℹ️ No result image found, taking screenshot as fallback")
             screenshot_bytes = await page.screenshot(full_page=True)
-            
             await browser.close()
-            
             return {
                 "status": "success",
                 "image": base64.b64encode(screenshot_bytes).decode(),
-                "method": "full_page_screenshot",
+                "method": "screenshot_fallback",
                 "size": len(screenshot_bytes)
             }

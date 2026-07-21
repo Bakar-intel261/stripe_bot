@@ -20,6 +20,25 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Install ProtonVPN (free tier)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openvpn curl
+          sudo curl -o /etc/openvpn/update-resolv-conf https://raw.githubusercontent.com/ProtonVPN/scripts/master/update-resolv-conf
+          sudo chmod +x /etc/openvpn/update-resolv-conf
+          sudo curl -o /etc/openvpn/protonvpn-nl.ovpn https://raw.githubusercontent.com/ProtonVPN/protonvpn-openvpn/master/ProtonVPN_OpenVPN_Free_NL.ovpn
+          echo "simonshichet899@gmail.com" > /tmp/auth.txt
+          echo "Shichet+123" >> /tmp/auth.txt
+          sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
+          sudo chmod 600 /etc/openvpn/auth.txt
+
+      - name: Connect to ProtonVPN
+        run: |
+          sudo openvpn --config /etc/openvpn/protonvpn-nl.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
+          sleep 15
+          echo "✅ VPN connected"
+          curl -s https://api.ipify.org?format=json || echo "VPN connection failed"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -30,7 +49,6 @@ jobs:
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
 
       - name: Commit updated used_fingerprints.json (if any)
         run: |

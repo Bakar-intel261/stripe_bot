@@ -3,6 +3,7 @@ import base64
 import asyncio
 import re
 import random
+import os
 from playwright.async_api import async_playwright
 from chrome_fingerprints import FingerprintGenerator
 from io import BytesIO
@@ -50,7 +51,6 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
-        """Click Credits link → pricing → back."""
         logger.info("🪙 Refreshing credits via Credits link...")
         credit_link = page.locator('a:has-text("Credits")').first
         if await credit_link.count() == 0:
@@ -58,7 +58,6 @@ class TaskExecutor:
         if await credit_link.count() == 0:
             logger.warning("⚠️ Credits link not found")
             return False
-
         await credit_link.click()
         await self._human_wait(3, 5)
         await self._send_screenshot(update, page, "🪙 Credits page")
@@ -69,33 +68,21 @@ class TaskExecutor:
         return True
 
     async def _get_credits(self, page):
-        """Extract the actual credit balance (not the cost)."""
-        # Look for the coin icon and its parent
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
             parent = coin.locator('..')
             if await parent.count() > 0:
                 text = await parent.text_content()
-                logger.info(f"Text from coin parent: {text}")
                 numbers = re.findall(r'\d+', text)
                 if numbers:
-                    balance = int(numbers[0])
-                    logger.info(f"Balance from coin parent: {balance}")
-                    return balance
-
-        # Fallback: search for "Credits" followed by a number
+                    return int(numbers[0])
         page_text = await page.content()
         match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
         if match:
-            balance = int(match.group(1))
-            logger.info(f"Balance from page text: {balance}")
-            return balance
-
-        logger.warning("Could not find credit balance")
+            return int(match.group(1))
         return None
 
     async def _ensure_credits(self, page, update, refresh_if_needed=True):
-        """Check credits; if 0, optionally refresh and re-check."""
         credits = await self._get_credits(page)
         if credits is None:
             logger.warning("Could not read credits. Assuming 0.")
@@ -103,7 +90,6 @@ class TaskExecutor:
         if credits >= 10:
             logger.info(f"✅ Sufficient credits: {credits}")
             return True
-
         if refresh_if_needed:
             logger.warning(f"⚠️ Insufficient credits: {credits}. Attempting refresh...")
             await self._refresh_credits_proactively(update, page)
@@ -123,7 +109,6 @@ class TaskExecutor:
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
         fp = self.fp_gen.get_fingerprint()
         ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-        # Get screen resolution
         if hasattr(fp, 'screen_resolution'):
             width = getattr(fp.screen_resolution, 'width', 1920)
             height = getattr(fp.screen_resolution, 'height', 1080)
@@ -140,9 +125,14 @@ class TaskExecutor:
         timezone = getattr(fp, 'timezone', 'America/New_York')
         logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}, locale={locale}, tz={timezone}")
 
+        proxy_url = os.environ.get("PROXY_URL")
+        proxy = {"server": proxy_url} if proxy_url else None
+        if proxy:
+            logger.info(f"🌐 Using proxy: {proxy_url[:50]}...")
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                channel="chrome",   # use real Chrome
+                channel="chrome",
                 headless=True,
                 args=[
                     "--no-sandbox",
@@ -151,7 +141,8 @@ class TaskExecutor:
                     "--disable-features=IsolateOrigins,site-per-process",
                     "--disable-web-security",
                     "--disable-dev-shm-usage"
-                ]
+                ],
+                proxy=proxy
             )
             context = await browser.new_context(
                 user_agent=ua,
@@ -193,13 +184,18 @@ class TaskExecutor:
 
             logger.info("===== Starting process =====")
 
-            # ---- Step 1: Landing ----
             logger.info("🌐 Navigating to swapfaces.ai")
             await page.goto(target_url, wait_until="networkidle", timeout=30000)
+
+            try:
+                ip = await page.evaluate("() => fetch('https://api.ipify.org?format=json').then(r => r.json()).then(data => data.ip)")
+                logger.info(f"🖥️ Current IP: {ip}")
+            except:
+                logger.warning("Could not fetch IP")
+
             await self._human_wait(3, 6)
             await self._send_screenshot(update, page, "🌐 Landing page")
 
-            # ---- Step 2: Age Verification ----
             age_btn = page.locator('button:has-text("I Am 18 or Older")').first
             if await age_btn.count() > 0:
                 logger.info("✅ Age verification found, clicking via coordinates...")
@@ -209,10 +205,8 @@ class TaskExecutor:
             else:
                 logger.info("ℹ️ No age verification needed")
 
-            # ---- Step 3: Proactive Credit Refresh ----
             await self._refresh_credits_proactively(update, page)
 
-            # ---- Step 4: Upload ----
             logger.info("🔍 Looking for upload area...")
             upload_btn = page.locator('button.sf-image-to-image__upload').first
             await upload_btn.wait_for(state="visible", timeout=15000)
@@ -236,7 +230,6 @@ class TaskExecutor:
             await self._human_wait(2, 4)
             await self._send_screenshot(update, page, "📤 After upload")
 
-            # ---- Step 5: Consent popup ----
             logger.info("⏳ Waiting for consent popup card...")
             consent_card = page.locator('div.mi-upload-consent__card').first
             try:
@@ -257,7 +250,6 @@ class TaskExecutor:
                     await self._human_wait(3, 5)
                 await self._send_screenshot(update, page, "✅ Consent popup dismissed")
 
-            # ---- Step 6: Enter prompt ----
             prompt_input = page.locator('textarea, input[type="text"], div[contenteditable="true"]').first
             if await prompt_input.count() > 0:
                 logger.info("✏️ Entering prompt: 'Remove clothes'")
@@ -265,7 +257,6 @@ class TaskExecutor:
                 await self._human_wait(1, 2)
             await self._send_screenshot(update, page, "📝 Prompt entered")
 
-            # ---- Step 7: Credit check before generate ----
             logger.info("💰 Checking credits before generate...")
             if not await self._ensure_credits(page, update, refresh_if_needed=True):
                 logger.error("Insufficient credits after refresh, aborting")
@@ -275,7 +266,6 @@ class TaskExecutor:
                 return
             await self._send_screenshot(update, page, "💰 Credits OK (10+)")
 
-            # ---- Step 8: Click Generate ----
             logger.info("🔍 Looking for generate button...")
             generate_btn = page.locator('button.sf-image-to-image__generate-btn, button:has-text("Generate")').first
             await generate_btn.wait_for(state="visible", timeout=10000)
@@ -288,7 +278,6 @@ class TaskExecutor:
             await self._human_wait(2, 3)
             await self._send_screenshot(update, page, "⚡ Generate clicked")
 
-            # ---- Step 9: Wait for result ----
             logger.info("⏳ Waiting for result image (max 60s)...")
             result_img = None
             start_time = asyncio.get_event_loop().time()
@@ -304,7 +293,6 @@ class TaskExecutor:
                     break
                 await asyncio.sleep(1)
 
-            # ---- Step 10: Final ----
             await self._human_wait(2, 4)
             if result_img:
                 caption = f"✅ Final result (generated at {elapsed}s)"

@@ -26,14 +26,11 @@ jobs:
           pip install -r requirements.txt
           playwright install chrome
 
-      - name: Fetch free proxies (optional)
-        run: |
-          curl -sL https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all.txt -o proxies.txt || echo "No proxies fetched"
-
       - name: Run bot
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
 
       - name: Commit updated used_fingerprints.json (if any)
         run: |

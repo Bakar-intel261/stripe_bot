@@ -20,45 +20,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install OpenVPN
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y openvpn curl jq
-
-      - name: Create config and credentials
-        run: |
-          sudo mkdir -p /etc/openvpn
-          sudo tee /etc/openvpn/auth.txt > /dev/null << AUTH
-TKns6zrWuLiQxg9K
-Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
-AUTH
-          sudo chmod 600 /etc/openvpn/auth.txt
-
-          sudo tee /etc/openvpn/protonvpn.ovpn > /dev/null << OVPN
-client
-dev tun
-proto udp
-remote us-01.protonvpn.com 1194
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-remote-cert-tls server
-verify-x509-name ProtonVPN_Free_US name
-auth-user-pass /etc/openvpn/auth.txt
-comp-lzo
-verb 3
-OVPN
-
-      - name: Connect to ProtonVPN
-        run: |
-          echo "🌐 Connecting to ProtonVPN..."
-          sudo openvpn --config /etc/openvpn/protonvpn.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
-          sleep 20
-          echo "✅ VPN connected"
-          echo "🖥️ Current IP:"
-          curl -s https://api.ipify.org
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -69,6 +30,7 @@ OVPN
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
 
       - name: Commit updated used_fingerprints.json (if any)
         run: |

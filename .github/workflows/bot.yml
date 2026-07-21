@@ -20,46 +20,40 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install ProtonVPN CLI
+      - name: Install OpenVPN and dependencies
         run: |
-          echo "📦 Installing ProtonVPN CLI..."
           sudo apt-get update
-          sudo apt-get install -y openvpn jq
-          sudo python3 -m pip install protonvpn-cli
-          echo "✅ ProtonVPN CLI installed"
+          sudo apt-get install -y openvpn curl jq
 
-      - name: Connect to ProtonVPN (random free server)
+      - name: Setup ProtonVPN OpenVPN config
         run: |
-          echo "🔑 Initializing ProtonVPN with OpenVPN credentials..."
-          sudo protonvpn init --username TKns6zrWuLiQxg9K --password Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
+          # Create auth file with OpenVPN credentials
+          echo "TKns6zrWuLiQxg9K" > /tmp/auth.txt
+          echo "Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM" >> /tmp/auth.txt
+          sudo mv /tmp/auth.txt /etc/openvpn/auth.txt
+          sudo chmod 600 /etc/openvpn/auth.txt
           
-          echo "🔐 Logging in..."
-          sudo protonvpn login TKns6zrWuLiQxg9K Jv1hsQCPF9X9DjPRIZQPsJHkyEiRRkVM
-          
-          echo "🌐 Connecting to random free server..."
-          sudo protonvpn connect -r
+          # Download ProtonVPN free server config (US server)
+          sudo curl -o /etc/openvpn/protonvpn-us.ovpn https://raw.githubusercontent.com/ProtonVPN/protonvpn-openvpn/master/ProtonVPN_OpenVPN_Free_US.ovpn
+
+      - name: Connect to ProtonVPN
+        run: |
+          echo "🌐 Connecting to ProtonVPN..."
+          sudo openvpn --config /etc/openvpn/protonvpn-us.ovpn --auth-user-pass /etc/openvpn/auth.txt --daemon
           sleep 15
-          
           echo "✅ VPN connected"
           echo "🖥️ Checking IP address..."
           IP=$(curl -s https://api.ipify.org?format=json | jq -r '.ip' 2>/dev/null || echo "Failed to get IP")
           echo "🖥️ Current IP: $IP"
-          
-          echo "📡 IP Info:"
-          curl -s https://ipinfo.io || echo "IP info failed"
 
       - name: Install dependencies
         run: |
-          echo "📦 Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           playwright install chrome
-          echo "✅ Dependencies installed"
 
       - name: Run bot
-        run: |
-          echo "🤖 Starting bot..."
-          python bot.py
+        run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
 

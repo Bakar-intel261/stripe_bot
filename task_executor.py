@@ -4,6 +4,7 @@ import asyncio
 import re
 import random
 from playwright.async_api import async_playwright
+from chrome_fingerprints import FingerprintGenerator
 from io import BytesIO
 from PIL import Image
 
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class TaskExecutor:
     def __init__(self):
-        pass
+        self.fp_gen = FingerprintGenerator()
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))
@@ -68,7 +69,7 @@ class TaskExecutor:
         return True
 
     async def _get_credits(self, page):
-        """Extract the actual credit balance."""
+        """Extract the actual credit balance (not the cost)."""
         # Look for the coin icon and its parent
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
@@ -120,7 +121,10 @@ class TaskExecutor:
 
     async def process_photo(self, update, image_bytes):
         target_url = "https://www.swapfaces.ai/undress-ai-remover"
+        fp = self.fp_gen.get_fingerprint()
+        ua = getattr(fp, 'user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
         width, height = 1920, 1080
+        logger.info(f"Using fingerprint: {ua[:50]}..., {width}x{height}")
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -129,40 +133,32 @@ class TaskExecutor:
                     "--no-sandbox",
                     "--disable-gpu",
                     "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-web-security",
                     "--disable-dev-shm-usage"
                 ]
             )
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                user_agent=ua,
                 viewport={"width": width, "height": height},
-                locale="en-US",
-                timezone_id="America/New_York",
-                device_scale_factor=1,
-                extra_http_headers={
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Cache-Control': 'max-age=0',
-                }
+                locale=getattr(fp, 'locale', 'en-US'),
+                timezone_id=getattr(fp, 'timezone', 'America/New_York'),
+                device_scale_factor=1
             )
             page = await context.new_page()
 
-            # Remove webdriver
             await page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-                Object.defineProperty(window, 'chrome', { value: { runtime: {} } });
-                Object.defineProperty(navigator, 'platform', { value: 'Win32' });
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
-                );
             """)
+
+            try:
+                from playwright_stealth import stealth_async
+                await stealth_async(page)
+                logger.info("✅ Stealth applied")
+            except ImportError:
+                logger.warning("⚠️ playwright-stealth not installed")
 
             logger.info("===== Starting process =====")
 

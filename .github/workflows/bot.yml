@@ -35,7 +35,7 @@ jobs:
           
           echo "✅ Selected server: $SERVER_NAME ($SERVER_IP)"
           
-          cat > /tmp/protonvpn.ovpn << EOF2
+          cat > /tmp/protonvpn.ovpn << EOFVPN
 client
 dev tun
 proto udp
@@ -49,7 +49,7 @@ verify-x509-name $SERVER_NAME name
 auth-user-pass /tmp/auth.txt
 comp-lzo
 verb 3
-EOF2
+EOFVPN
           
           sudo mv /tmp/protonvpn.ovpn /etc/openvpn/protonvpn.ovpn
 

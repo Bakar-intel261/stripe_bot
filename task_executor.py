@@ -52,7 +52,8 @@ class TaskExecutor:
         await asyncio.sleep(delay)
 
     async def _refresh_credits_proactively(self, update, page):
-        logger.info("🪙 Refreshing credits via Credits link...")
+        """Simply click Credits link and take screenshot (don't go back)."""
+        logger.info("🪙 Clicking Credits link...")
         credit_link = page.locator('a:has-text("Credits")').first
         if await credit_link.count() == 0:
             credit_link = page.locator('button:has-text("Credits")').first
@@ -62,13 +63,36 @@ class TaskExecutor:
         await credit_link.click()
         await self._human_wait(3, 5)
         await self._send_screenshot(update, page, "🪙 Credits page")
-        await self._human_wait(2, 4)
-        await page.go_back()
-        await self._human_wait(3, 6)
-        await self._send_screenshot(update, page, "🔙 Back after refresh")
+        # We now have credits – no need to go back!
+        logger.info("✅ Credits page loaded (credits are now applied)")
         return True
 
     async def _get_credits(self, page):
+        """Extract the actual credit balance."""
+        # Try multiple selectors
+        selectors = [
+            'span[class*="credit"]',
+            'div[class*="credit"]',
+            'span:has-text("Credits")',
+            'div:has-text("Credits")',
+            '.sf-cost-credits',
+            '.credits',
+            '[data-testid="credits"]',
+        ]
+        for sel in selectors:
+            try:
+                elem = page.locator(sel).first
+                if await elem.count() > 0:
+                    text = await elem.text_content()
+                    numbers = re.findall(r'\d+', text)
+                    if numbers:
+                        balance = int(numbers[0])
+                        logger.info(f"Found balance {balance} with selector '{sel}'")
+                        return balance
+            except Exception:
+                continue
+
+        # Find coin icon and get parent text
         coin = page.locator('img[alt*="coin"], img[src*="coin"], svg[alt*="coin"]').first
         if await coin.count() > 0:
             parent = coin.locator('..')
@@ -76,11 +100,19 @@ class TaskExecutor:
                 text = await parent.text_content()
                 numbers = re.findall(r'\d+', text)
                 if numbers:
-                    return int(numbers[0])
+                    balance = int(numbers[0])
+                    logger.info(f"Balance from coin parent: {balance}")
+                    return balance
+
+        # Search page text for "Credits" followed by a number
         page_text = await page.content()
         match = re.search(r'Credits?\s*:?\s*(\d+)', page_text, re.I)
         if match:
-            return int(match.group(1))
+            balance = int(match.group(1))
+            logger.info(f"Balance from page text: {balance}")
+            return balance
+
+        logger.warning("Could not find credit balance")
         return None
 
     async def _ensure_credits(self, page, update, refresh_if_needed=True):

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class TaskExecutor:
     def __init__(self):
         self.fp_gen = FingerprintGenerator()
+        logger.info("🚀 NEW CODE DEPLOYED WITH PROXY SUPPORT - v2.0")  # <-- UNIQUE LOG
 
     def _resize_image(self, image_bytes, max_dim=1280):
         img = Image.open(BytesIO(image_bytes))

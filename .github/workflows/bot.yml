@@ -1,39 +1,33 @@
-name: Telegram Donut Bot (Fingerprint Rotation)
+# ============================================
+# FILE 3: .github/workflows/bot.yml
+# ============================================
+name: Manager Bot (24/7)
 
 on:
-  workflow_dispatch:  # ONLY runs when you manually trigger it
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'  # Keeps runner alive
 
 jobs:
-  run-bot:
+  run-manager:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      - uses: actions/checkout@v4
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
+      
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          playwright install chrome
-
-      - name: Run bot
-        run: python bot.py
+          pip install python-telegram-bot requests
+          pip install google-colab-cli  # For Colab orchestration
+      
+      - name: Run manager bot
+        run: python manager.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          PROXY_URL: ${{ secrets.PROXY_URL }}
-
-      - name: Commit updated used_fingerprints.json (if any)
-        run: |
-          git config user.name "github-actions[bot]"
-          git config.user.email "github-actions[bot]@users.noreply.github.com"
-          git add used_fingerprints.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "Update fingerprint cooldown"
-          git push
+          MANAGER_TOKEN: ${{ secrets.MANAGER_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

@@ -4,41 +4,36 @@ import time
 import base64
 import threading
 import requests
+import random
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from supabase import create_client
 
-# === CONFIG (from environment) ===
+# === CONFIG ===
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 USDT_WALLET = os.environ.get("USDT_WALLET")
-COLAB_NOTEBOOK_ID = os.environ.get("COLAB_NOTEBOOK_ID")
+COLAB_NOTEBOOK_IDS = os.environ.get("COLAB_NOTEBOOK_IDS", "").split(",")
+COLAB_NOTEBOOK_IDS = [n.strip() for n in COLAB_NOTEBOOK_IDS if n.strip()]
 MAX_ACTIVE_TASKS = int(os.environ.get("MAX_ACTIVE_TASKS", 5))
+ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")  # set this to your Telegram ID
 
-# Fallback to hardcoded from manager.py (if env not set)
+# Fallback (optional)
 if not SUPABASE_URL:
     SUPABASE_URL = "https://nidptbrkgxjnupqpqakt.supabase.co"
 if not SUPABASE_KEY:
     SUPABASE_KEY = "sb_publishable_G93jIOS4WBZBCqwGYyj4og_J9roWaDs"
 
-# === Supabase client ===
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# === Logging ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === USDT packages ===
-CREDIT_PACKAGES = {
-    10: 100,
-    25: 300,
-    50: 650,
-    100: 1400,
-}
+# === CREDIT PACKAGES ===
+CREDIT_PACKAGES = {10: 100, 25: 300, 50: 650, 100: 1400}
 
-# === Database helpers (from manager.py) ===
+# === DATABASE HELPERS ===
 def get_user(user_id):
     res = supabase.table("users").select("*").eq("user_id", user_id).execute()
     return res.data[0] if res.data else None
@@ -100,7 +95,7 @@ def update_task(task_id, status, result_image=None, error=None):
         update_data["completed_at"] = "now()"
     supabase.table("tasks").update(update_data).eq("task_id", task_id).execute()
 
-# === Payment verification (TronGrid) ===
+# === PAYMENT VERIFICATION ===
 def verify_usdt_transaction(tx_id):
     url = f"https://api.trongrid.io/v1/transactions/{tx_id}"
     try:
@@ -111,8 +106,6 @@ def verify_usdt_transaction(tx_id):
         txs = data.get("data", [])
         if not txs:
             return False, None, None
-        tx = txs[0]
-        # Check for TRC20 transfer events
         events_url = f"https://api.trongrid.io/v1/transactions/{tx_id}/events"
         events_resp = requests.get(events_url, timeout=10)
         if events_resp.status_code != 200:
@@ -130,9 +123,13 @@ def verify_usdt_transaction(tx_id):
         logger.error(f"Verify error: {e}")
         return False, None, None
 
-# === Colab spawner ===
+# === COLAB SPAWNER (Multi‑Notebook) ===
 def spawn_colab(task_id, user_id, image_b64):
-    url = f"https://colab.research.google.com/notebooks/api/v1/execute?notebook_id={COLAB_NOTEBOOK_ID}"
+    if not COLAB_NOTEBOOK_IDS:
+        logger.error("❌ No Colab notebook IDs configured!")
+        return False
+    notebook_id = random.choice(COLAB_NOTEBOOK_IDS)
+    url = f"https://colab.research.google.com/notebooks/api/v1/execute?notebook_id={notebook_id}"
     payload = {
         "params": {
             "USER_ID": user_id,
@@ -146,7 +143,7 @@ def spawn_colab(task_id, user_id, image_b64):
     try:
         resp = requests.post(url, json=payload, timeout=30)
         if resp.status_code == 200:
-            logger.info(f"✅ Colab started for task {task_id}")
+            logger.info(f"✅ Colab started for task {task_id} using {notebook_id}")
             return True
         else:
             logger.error(f"Colab error: {resp.status_code} - {resp.text}")
@@ -155,7 +152,7 @@ def spawn_colab(task_id, user_id, image_b64):
         logger.error(f"Colab spawn failed: {e}")
         return False
 
-# === Controller thread ===
+# === CONTROLLER THREAD ===
 def controller_loop():
     while True:
         try:
@@ -168,7 +165,7 @@ def controller_loop():
                 time.sleep(2)
                 continue
 
-            # Pick oldest pending task
+            # Get oldest pending task
             resp = supabase.table("tasks")\
                 .select("*")\
                 .eq("status", "pending")\
@@ -192,24 +189,20 @@ def controller_loop():
                 .eq("status", "pending")\
                 .execute()
             if not updated.data:
-                continue  # someone else took it
+                continue
 
-            # Spawn Colab
             success = spawn_colab(task_id, user_id, image_b64)
             if not success:
-                # Revert to pending
                 supabase.table("tasks")\
                     .update({"status": "pending"})\
                     .eq("task_id", task_id)\
                     .execute()
-                logger.warning(f"Retrying task {task_id} later")
-            else:
-                logger.info(f"Task {task_id} dispatched to Colab")
+                logger.warning(f"Retrying task {task_id}")
         except Exception as e:
             logger.error(f"Controller error: {e}")
             time.sleep(5)
 
-# === Stale task recovery ===
+# === STALE TASK RECOVERY ===
 def stale_recovery_loop():
     while True:
         try:
@@ -224,7 +217,7 @@ def stale_recovery_loop():
             logger.error(f"Stale recovery error: {e}")
             time.sleep(120)
 
-# === Telegram bot handlers ===
+# === TELEGRAM HANDLERS ===
 async def start(update: Update, context):
     user = update.effective_user
     user_id = str(user.id)
@@ -345,14 +338,36 @@ async def help_command(update: Update, context):
         "/help - This message"
     )
 
+# === ADMIN COMMANDS (only for ADMIN_USER_ID) ===
+async def stats(update: Update, context):
+    user_id = str(update.effective_user.id)
+    if user_id != ADMIN_USER_ID:
+        await update.message.reply_text("⛔ Admin only.")
+        return
+    users = supabase.table("users").select("*", count="exact").execute()
+    tasks = supabase.table("tasks").select("*", count="exact").execute()
+    total_users = users.count or 0
+    total_tasks = tasks.count or 0
+    # Sum credits
+    credits_resp = supabase.table("users").select("credits").execute()
+    total_credits = sum([u["credits"] for u in credits_resp.data]) if credits_resp.data else 0
+    await update.message.reply_text(
+        f"📊 **Admin Stats**\n"
+        f"👤 Users: {total_users}\n"
+        f"📋 Tasks: {total_tasks}\n"
+        f"💰 Total Credits: {total_credits}\n"
+        f"💵 USDT Wallet: `{USDT_WALLET}`"
+    )
+
+# === MAIN ===
 def main():
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN not set!")
         return
-    # Start controller threads
+    # Start threads
     threading.Thread(target=controller_loop, daemon=True).start()
     threading.Thread(target=stale_recovery_loop, daemon=True).start()
-    # Start bot
+    # Bot app
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
@@ -361,6 +376,7 @@ def main():
     app.add_handler(CommandHandler("addcredits", addcredits))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("stats", stats))  # admin only
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     logger.info("✅ Bot started!")
     app.run_polling()
